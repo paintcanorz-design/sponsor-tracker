@@ -1,0 +1,23 @@
+# HTTP 請求
+requests>=2.31.0
+packaging>=23.0
+
+# 網頁爬取 (Fanbox, Fantia 無官方 API)
+playwright>=1.40.0
+
+# 排程
+schedule>=1.2.0
+
+# 設定檔
+pyyaml>=6.0
+
+# 圖形介面
+PySide6>=6.6.0
+
+# 系統匣（Windows 工作列右下角）
+pystray>=0.19.5
+# 與 pystray、多數套件相容；若需 Gradio 等請維持 <12
+Pillow>=10.0.0,<12.0.0
+
+# 資料儲存
+# SQLite 內建於 Python，無需額外套件

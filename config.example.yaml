@@ -1,0 +1,35 @@
+# 贊助額追蹤 - 設定檔範例
+# 複製此檔為 config.yaml 並填入你的憑證
+
+# 選填：資料庫位置（專案搬到別台或想把 DB 放在雲端同步資料夾時使用）
+# 可填絕對路徑，或相對於專案根目錄的路徑
+# paths:
+#   data_dir: "D:/我的備份/贊助額資料"
+#   # 或直接指定檔案（與 data_dir 擇一即可，database 優先）：
+#   # database: "D:/我的備份/贊助額資料/sponsorship_data.db"
+
+# Patreon (登入 Patreon 後由程式自動抓取 cookies)
+patreon:
+  cookies: ""  # 使用「登入 Patreon」按鈕取得
+  creator_page: "https://www.patreon.com/c/paintcan"  # 你的創作者頁面 URL
+
+# Fanbox (從瀏覽器取得 Cookie，登入後 F12 -> Application -> Cookies -> fanbox.cc)
+fanbox:
+  cookies: "session=xxx; FANBOXSESSID=xxx"  # 或使用 cookie 檔案路徑
+
+# Fantia (從瀏覽器取得 _session_id，登入後 F12 -> Application -> Cookies -> fantia.jp)
+fantia:
+  session_id: "你的 _session_id 值"
+
+# 排程設定
+schedule:
+  update_interval_hours: 1  # 每小時更新一次
+
+# GUI 排程（程式會自動寫入：上次選擇的間隔與是否預設啟動排程）
+# gui:
+#   schedule_interval: "1 小時"
+#   schedule_auto_start: true
+#   # Discord Incoming Webhook（選填）：僅「排程」自動更新且偵測到贊助增加時傳送
+#   # discord_webhook_url: "https://discord.com/api/webhooks/數字/令牌"
+#   # daily_report_enabled: true
+#   # daily_report_time_jst: "09:00"   # 每日總覽報表（日本時間 JST），程式需保持執行

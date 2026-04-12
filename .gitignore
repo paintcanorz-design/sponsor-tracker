@@ -1,0 +1,9 @@
+config.yaml
+*.db
+__pycache__/
+.venv/
+venv/
+*.pyc
+startup_error.log
+【請由此執行】贊助額追蹤/
+build/
