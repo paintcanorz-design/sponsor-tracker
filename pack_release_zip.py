@@ -34,10 +34,7 @@ def _must_skip_file(path: Path) -> bool:
 
 
 # 與 exe 同層一併發佈（由專案根複製，確保 zip 內一定有）
-_BAT_SIDECAR = (
-    "安裝瀏覽器登入環境.bat",
-    "開啟exe前請開啟此檔案安裝所需環境.bat",
-)
+_BAT_SIDECAR = ("開啟exe前請開啟此檔案安裝所需環境.bat",)
 
 
 def _copy_bat_scripts_into(src: Path) -> None:

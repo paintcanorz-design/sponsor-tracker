@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def _install_playwright_browsers_cli() -> int:
-    """下載 Playwright 用 Chromium（設定內瀏覽器登入）。由「安裝瀏覽器登入環境.bat」呼叫。"""
+    """下載 Playwright 用 Chromium（設定內瀏覽器登入）。由「開啟exe前請開啟此檔案安裝所需環境.bat」呼叫。"""
     print("正在安裝 Playwright 瀏覽器（Chromium），供「瀏覽器登入」使用。")
     print("約數百 MB，需網路；若失敗可改用手動貼 Cookie。\n")
     old = sys.argv[:]
