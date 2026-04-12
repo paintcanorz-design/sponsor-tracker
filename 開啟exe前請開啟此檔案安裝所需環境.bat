@@ -8,17 +8,26 @@ if not exist "%EXE%" (
     exit /b 1
 )
 echo.
-echo 即將下載 Playwright 用 Chromium（設定內瀏覽器登入需要），約數百 MB，需網路。
-echo 若不需要瀏覽器登入可略過，改用手動貼 Cookie。
+echo [提示] 即將下載 Playwright 用 Chromium（設定內瀏覽器登入需要），約數百 MB，需網路。
+echo [提示] 若不需要可略過本步驟，改用手動貼 Cookie。
 echo.
 "%EXE%" --install-playwright-browsers
 set "RC=%ERRORLEVEL%"
 echo.
-if %RC% neq 0 (
-    echo 安裝未成功。可改用手動貼 Cookie 等方式登入。
-) else (
-    echo 完成。接下來可雙擊贊助額追蹤.exe；瀏覽器登入請到設定操作。
-)
-echo.
-timeout /t 6 /nobreak >nul
+if not "%RC%"=="0" goto INSTALL_FAIL
+echo ----------------------------
+echo [成功] 瀏覽器環境已就緒。
+echo        即將開啟「贊助額追蹤」主程式…
+echo ----------------------------
+timeout /t 2 /nobreak >nul
+start "" "%EXE%"
+exit /b 0
+
+:INSTALL_FAIL
+echo ----------------------------
+echo [失敗] 瀏覽器環境安裝未完成。
+echo        結束碼: %RC%
+echo        可改用手動貼 Cookie，或檢查網路／防火牆後再執行本腳本。
+echo ----------------------------
+timeout /t 8 /nobreak
 exit /b %RC%
