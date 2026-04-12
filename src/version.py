@@ -6,4 +6,4 @@ APP_VERSION = "1.0.0"
 
 # 發佈到 GitHub 後請改成「使用者名稱/倉庫名稱」，例如 "octocat/Hello-World"。
 # 留空則僅在偵測到 .git 時使用 git pull，不會查詢 GitHub API。
-GITHUB_REPO: str = ""
+GITHUB_REPO: str = "paintcanorz-design/sponsor-tracker"
