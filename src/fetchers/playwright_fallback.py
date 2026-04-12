@@ -36,7 +36,7 @@ def fanbox_fetch_with_playwright(cookies: str) -> Optional[dict]:
         context.add_cookies(cookie_list)
         page = context.new_page()
         try:
-            page.goto("https://www.fanbox.cc/manage/payouts", wait_until="networkidle", timeout=30000)
+            page.goto("https://www.fanbox.cc/manage/dashboard", wait_until="domcontentloaded", timeout=30000)
             content = page.content()
             # 嘗試從頁面提取
             for pattern in [
@@ -135,7 +135,7 @@ def fantia_fetch_with_playwright(session_id: str) -> Optional[dict]:
 def _parse_patreon_page(content: str) -> Optional[dict]:
     """
     從頁面內容解析收益與贊助人數
-    目標：會籍 $925／月、192 收費（來自 https://www.patreon.com/c/paintcan）
+    從創作者頁（預設 https://www.patreon.com/c/user）解析會籍金額與收費人數。
     """
     amount, patron_count = None, None
     # 允許換行與空白
@@ -203,7 +203,7 @@ def patreon_fetch_with_playwright(cookies: str, creator_page: str = None) -> Opt
         for k, v in cookie_dict.items()
     ]
 
-    url = creator_page or "https://www.patreon.com/c/paintcan"
+    url = creator_page or "https://www.patreon.com/c/user"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)

@@ -13,14 +13,18 @@ except ImportError:
 def _wait_done_or_cancel(
     done: threading.Event, cancel: threading.Event, total_timeout: float = 600.0
 ) -> bool:
-    """等待使用者按「已完成」；若 cancel 先置位�回�� False。"""
-    step = 0.5
+    """等待使用者按「已完成」；若 cancel 先置位則回傳 False。
+
+    使用 is_set 輪詢而非 Event.wait 迴圈，避免與 Qt／Playwright 執行緒互動時偶發無法喚醒。
+    """
+    step = 0.05
     deadline = time.monotonic() + total_timeout
     while time.monotonic() < deadline:
         if cancel.is_set():
             return False
-        if done.wait(timeout=step):
+        if done.is_set():
             return True
+        time.sleep(step)
     return False
 
 
@@ -36,7 +40,11 @@ def _run_fanbox(
             browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             page = context.new_page()
-            page.goto("https://www.fanbox.cc/")
+            page.goto("https://www.fanbox.cc/", wait_until="domcontentloaded", timeout=60000)
+            if cancel.is_set():
+                browser.close()
+                callback("")
+                return
             if not _wait_done_or_cancel(event, cancel, 600):
                 browser.close()
                 callback("")
@@ -56,7 +64,7 @@ def _run_fanbox(
 def _run_fantia(
     event: threading.Event, cancel: threading.Event, callback: Callable[[str], None]
 ):
-    """Fantia 登入��行��。可重複按「已完成登入」直到抓到有效 session。"""
+    """Fantia：登入後按一次「已完成」即抓取 _session_id。未取得則回傳空字串。"""
     if not PLAYWRIGHT_AVAILABLE:
         callback("")
         return
@@ -67,23 +75,25 @@ def _run_fantia(
             page = context.new_page()
             page.goto("https://fantia.jp/sessions/signin", wait_until="domcontentloaded", timeout=20000)
             page.wait_for_timeout(2000)
-            while True:
-                if cancel.is_set():
+            if cancel.is_set():
+                browser.close()
+                callback("")
+                return
+            if not _wait_done_or_cancel(event, cancel, 600):
+                browser.close()
+                callback("")
+                return
+            if cancel.is_set():
+                browser.close()
+                callback("")
+                return
+            cookies = context.cookies()
+            session_id = ""
+            for c in cookies:
+                if c["name"] == "_session_id":
+                    session_id = c["value"]
                     break
-                if not _wait_done_or_cancel(event, cancel, 600):
-                    break
-                if cancel.is_set():
-                    break
-                cookies = context.cookies()
-                session_id = ""
-                for c in cookies:
-                    if c["name"] == "_session_id":
-                        session_id = c["value"]
-                        break
-                callback(session_id)
-                if session_id:
-                    break
-                event.clear()
+            callback(session_id)
             browser.close()
     except Exception:
         callback("")
@@ -122,7 +132,10 @@ def fantia_login(
 def _run_patreon(
     event: threading.Event, cancel: threading.Event, callback: Callable[[str], None]
 ):
-    """Patreon 登入�器��使用者登入，完成後抓取 cookies。"""
+    """Patreon：開瀏覽器登入，使用者按一次「已完成」即抓取 cookies 並結束。
+
+    先前若 cookie 為空會 clear(event) 並再次等待，但 UI 已停用「已完成」按鈕，導致永遠卡住。
+    """
     if not PLAYWRIGHT_AVAILABLE:
         callback("")
         return
@@ -133,23 +146,25 @@ def _run_patreon(
             page = context.new_page()
             page.goto("https://www.patreon.com/login", wait_until="domcontentloaded", timeout=20000)
             page.wait_for_timeout(2000)
-            while True:
-                if cancel.is_set():
-                    break
-                if not _wait_done_or_cancel(event, cancel, 600):
-                    break
-                if cancel.is_set():
-                    break
-                cookies = context.cookies()
-                cookie_parts = []
-                for c in cookies:
-                    if "patreon" in c.get("domain", ""):
-                        cookie_parts.append(f"{c['name']}={c['value']}")
-                cookie_str = "; ".join(cookie_parts)
-                callback(cookie_str)
-                if cookie_str:
-                    break
-                event.clear()
+            if cancel.is_set():
+                browser.close()
+                callback("")
+                return
+            if not _wait_done_or_cancel(event, cancel, 600):
+                browser.close()
+                callback("")
+                return
+            if cancel.is_set():
+                browser.close()
+                callback("")
+                return
+            cookies = context.cookies()
+            cookie_parts = []
+            for c in cookies:
+                if "patreon" in c.get("domain", ""):
+                    cookie_parts.append(f"{c['name']}={c['value']}")
+            cookie_str = "; ".join(cookie_parts)
+            callback(cookie_str)
             browser.close()
     except Exception:
         callback("")

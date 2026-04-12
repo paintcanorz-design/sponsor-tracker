@@ -11,7 +11,18 @@ from functools import partial
 from datetime import timedelta
 from pathlib import Path
 from PySide6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QValueAxis
-from PySide6.QtCore import QEvent, QPoint, QRect, QDateTime, QMargins, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QPoint,
+    QRect,
+    QDateTime,
+    QMargins,
+    Qt,
+    QSignalBlocker,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -754,6 +765,12 @@ class CompactFloatWindow(QWidget):
 class SponsorMainWindow(QMainWindow):
     """\u8de8\u57f7\u7dd2\u7528\uff1a\u7248\u672c\u6aa2\u67e5\u5de5\u4f5c\u7d50\u679c\u5fc5\u9808\u56de\u5230\u4e3b\u57f7\u7dd2\u986f\u793a\u5c0d\u8a71\u6846\uff08\u4e0d\u53ef\u5728\u5de5\u4f5c\u57f7\u7dd2\u7528 QTimer.singleShot\u3002\uff09"""
     _update_check_worker_done = Signal(object)
+    # Playwright \u5728\u80cc\u666f\u57f7\u7dd2\u56de\u547c cookie \u6642\uff0c\u5fc5\u9808\u7528 Signal \u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u53ef\u5728\u8a72\u57f7\u7dd2 QTimer.singleShot\uff09\u3002
+    _browser_login_payload = Signal(str, str)
+    # \u80cc\u666f\u57f7\u7dd2\u5b8c\u6210\u8cc7\u6599\u64f7\u53d6\u5f8c\u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u7528 QTimer.singleShot\uff09
+    _manual_update_done = Signal(object, bool)
+    _manual_update_failed = Signal(str)
+    _dashboard_data_ready = Signal(int, object, object, bool, object)
 
     def __init__(self):
         super().__init__()
@@ -770,6 +787,7 @@ class SponsorMainWindow(QMainWindow):
         self._close_to_tray = bool(_gui0.get("close_to_tray", True))
         self._minimize_to_tray = bool(_gui0.get("minimize_to_tray", True))
         self._start_minimized_to_tray = bool(_gui0.get("start_minimized_to_tray", False))
+        self._start_with_windows = bool(_gui0.get("start_with_windows", True))
         self._tray: QSystemTrayIcon | None = None
         self._dash_debounce: QTimer | None = None
         self._dashboard_fetch_seq = 0
@@ -790,12 +808,21 @@ class SponsorMainWindow(QMainWindow):
         self._sound_vol_timer: QTimer | None = None
         self._app_update_busy = False
         self._update_check_worker_done.connect(self._on_update_check_worker_done)
+        self._browser_login_payload.connect(
+            self._on_browser_login_payload, Qt.ConnectionType.QueuedConnection
+        )
+        self._manual_update_done.connect(self._update_done, Qt.ConnectionType.QueuedConnection)
+        self._manual_update_failed.connect(self._update_fail, Qt.ConnectionType.QueuedConnection)
+        self._dashboard_data_ready.connect(
+            self._on_dashboard_data_ready, Qt.ConnectionType.QueuedConnection
+        )
 
         init_db()
         self._build_ui()
         self._init_tray()
         QTimer.singleShot(120, self._ensure_daily_report_thread)
         QTimer.singleShot(80, self._apply_schedule_preferences)
+        QTimer.singleShot(400, self._sync_windows_autostart)
         if self._start_minimized_to_tray and self._tray:
             QTimer.singleShot(280, self._apply_start_minimized_to_tray)
 
@@ -895,6 +922,7 @@ class SponsorMainWindow(QMainWindow):
         g["close_to_tray"] = bool(self._close_to_tray)
         g["minimize_to_tray"] = bool(self._minimize_to_tray)
         g["start_minimized_to_tray"] = bool(self._start_minimized_to_tray)
+        g["start_with_windows"] = bool(self._start_with_windows)
         save_config(self.config)
 
     def _copy_dashboard_total_to_clipboard(self):
@@ -1379,23 +1407,37 @@ class SponsorMainWindow(QMainWindow):
                     s = get_dashboard_stats()
                 period = get_period_comparison(7)
                 used = pending_snap is not None
-
-                def done():
-                    self._finish_dashboard_refresh(seq, s, period, used, pending_snap)
-
-                QTimer.singleShot(0, done)
+                self._dashboard_data_ready.emit(seq, s, period, used, pending_snap)
             except Exception:
-
-                def fail():
-                    self._finish_dashboard_refresh(seq, None, None, False, None)
-
-                QTimer.singleShot(0, fail)
+                self._dashboard_data_ready.emit(seq, None, None, False, None)
 
         threading.Thread(target=bg, daemon=True).start()
 
-    def _finish_dashboard_refresh(
-        self, seq: int, s: dict | None, period: dict | None, used_pending: bool, pending_snap: dict | None
-    ):
+    def _apply_dashboard_ui_immediate(self, s: dict) -> None:
+        """\u66f4\u65b0\u5b8c\u6210\u5f8c\u65bc\u4e3b\u57f7\u7dd2\u7acb\u5373\u91cd\u7e6e\u7e3d\u89bd\uff08\u907f\u514d\u80cc\u666f QTimer \u5931\u6548\u8207 seq \u7af6\u722d\uff09\u3002"""
+        self._dashboard_fetch_seq += 1
+        self._pending_dashboard_stats = None
+        try:
+            period = get_period_comparison(7)
+        except Exception:
+            period = None
+        self._paint_dashboard_view(s, period)
+        if self._compact_win and self._compact_win.isVisible():
+            self._compact_win.refresh(s)
+        try:
+            self._refresh_trend_chart()
+        except Exception:
+            pass
+
+    def _on_dashboard_data_ready(
+        self,
+        seq: int,
+        s: dict | None,
+        period: dict | None,
+        used_pending: bool,
+        pending_snap: object,
+    ) -> None:
+        """\u7531 Signal \u5f9e\u80cc\u666f\u57f7\u7dd2\u56de\u5230\u4e3b\u57f7\u7dd2\u61c9\u7528\u7e3d\u89bd\u3002"""
         if seq != self._dashboard_fetch_seq or s is None:
             return
         if used_pending and pending_snap is not None and self._pending_dashboard_stats is pending_snap:
@@ -1657,7 +1699,7 @@ class SponsorMainWindow(QMainWindow):
                     if not pc.get("cookies"):
                         return ("patreon", None, None)
                     try:
-                        url = pc.get("creator_page") or "https://www.patreon.com/c/paintcan"
+                        url = pc.get("creator_page") or "https://www.patreon.com/c/user"
                         d = PatreonFetcher(pc["cookies"], url).fetch_sponsorship()
                         return ("patreon", d, "\u7121\u6cd5\u53d6\u5f97\u6578\u64da" if not d else None)
                     except Exception as ex:
@@ -1712,17 +1754,9 @@ class SponsorMainWindow(QMainWindow):
 
                 fs = getattr(self, "_pending_update_from_schedule", False)
                 r = results
-
-                def done():
-                    self._update_done(r, fs)
-
-                QTimer.singleShot(0, done)
+                self._manual_update_done.emit(r, fs)
             except Exception as e:
-
-                def fail():
-                    self._update_fail(str(e))
-
-                QTimer.singleShot(0, fail)
+                self._manual_update_failed.emit(str(e))
 
         threading.Thread(target=do, daemon=True).start()
 
@@ -1779,8 +1813,9 @@ class SponsorMainWindow(QMainWindow):
         except Exception:
             self._last_update_increase = None
         if s is not None:
-            self._pending_dashboard_stats = s
-        self._refresh_dashboard()
+            self._apply_dashboard_ui_immediate(s)
+        else:
+            self._refresh_dashboard()
 
     def _update_fail(self, msg):
         self.update_btn.setEnabled(True)
@@ -1986,7 +2021,12 @@ class SponsorMainWindow(QMainWindow):
         sl.addWidget(self.update_status)
         left.addWidget(sync_card)
 
-        self._add_settings_group(left, "\u7a0b\u5f0f\u7248\u672c")
+        self._add_settings_group(
+            left,
+            "\u7a0b\u5f0f\u7248\u672c",
+            "\u82e5\u767c\u73fe\u7121\u6cd5\u6b63\u5e38\u5237\u65b0\u6578\u64da\uff0c\u8acb\u5617\u8a66\u6aa2\u67e5\u66f4\u65b0\uff1b"
+            "\u82e5\u7248\u672c\u5c1a\u672a\u66f4\u65b0\uff0c\u8acb\u7b49\u5f85\u958b\u767c\u8005\u66f4\u65b0\u7a0b\u5f0f\u7248\u672c\u3002",
+        )
         ver_card = _make_settings_group_card(card_parent)
         vl = QVBoxLayout(ver_card)
         vl.setContentsMargins(14, 12, 14, 12)
@@ -2009,7 +2049,7 @@ class SponsorMainWindow(QMainWindow):
             [
                 ("Patreon", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "patreon", PALETTE["patreon"]),
                 ("Fanbox", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "fanbox", PALETTE["fanbox"]),
-                ("Fantia", "\u52ff\u91cd\u65b0\u6574\u7406\uff1b\u5b8c\u6210\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "fantia", PALETTE["fantia"]),
+                ("Fantia", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "fantia", PALETTE["fantia"]),
             ]
         ):
             if j > 0:
@@ -2165,7 +2205,16 @@ class SponsorMainWindow(QMainWindow):
         self._sw_start_tray = QCheckBox("\u555f\u52d5\u6642\u53ea\u986f\u793a\u7cfb\u7d71\u532f\uff08\u4e3b\u8996\u7a97\u5148\u96b1\u85cf\uff09")
         self._sw_start_tray.setChecked(self._start_minimized_to_tray)
         self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
-        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray):
+        self._sw_autostart = QCheckBox(
+            "\u958b\u6a5f\u6642\u81ea\u52d5\u555f\u52d5\u7a0b\u5f0f\uff08\u50c5 Windows\uff09"
+        )
+        with QSignalBlocker(self._sw_autostart):
+            self._sw_autostart.setChecked(self._start_with_windows)
+        if sys.platform != "win32":
+            self._sw_autostart.setEnabled(False)
+            self._sw_autostart.setToolTip("\u50c5 Windows \u652f\u63f4\u958b\u6a5f\u81ea\u52d5")
+        self._sw_autostart.toggled.connect(self._on_switch_autostart)
+        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
             tl.addWidget(w)
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self._sw_close_tray.setEnabled(False)
@@ -2205,6 +2254,24 @@ class SponsorMainWindow(QMainWindow):
     def _on_switch_start_tray(self, c):
         self._start_minimized_to_tray = bool(c)
         self._save_tray_gui_prefs()
+
+    def _sync_windows_autostart(self):
+        if sys.platform != "win32":
+            return
+        from src.win_autostart import apply_start_with_windows
+
+        apply_start_with_windows(self._start_with_windows)
+
+    def _on_switch_autostart(self, c):
+        self._start_with_windows = bool(c)
+        self._save_tray_gui_prefs()
+        if sys.platform != "win32":
+            return
+        from src.win_autostart import apply_start_with_windows
+
+        ok, msg = apply_start_with_windows(self._start_with_windows)
+        if not ok and msg:
+            QMessageBox.warning(self, "\u958b\u6a5f\u81ea\u52d5", msg)
 
     def _on_sound_volume_slider(self, v):
         self._sound_volume_lbl.setText(f"{int(v)}%")
@@ -2406,7 +2473,18 @@ class SponsorMainWindow(QMainWindow):
         self._refresh_dashboard()
 
     # --- login ---
+    def _on_browser_login_payload(self, platform: str, payload: str) -> None:
+        """\u7531 Signal \u5f9e Playwright \u57f7\u7dd2\u56de\u5230\u4e3b\u57f7\u7dd2\u8655\u7406\u3002"""
+        if platform == "patreon":
+            self._on_patreon_cookie(payload)
+        elif platform == "fanbox":
+            self._on_fanbox_cookie(payload)
+        elif platform == "fantia":
+            self._on_fantia_session(payload)
+
     def _patreon_login_start(self):
+        if ce := self.browser_cancel_events.get("patreon"):
+            ce.set()
         self.browser_done_events["patreon"] = threading.Event()
         self.browser_cancel_events["patreon"] = threading.Event()
         self._login_flow_active["patreon"] = True
@@ -2416,7 +2494,7 @@ class SponsorMainWindow(QMainWindow):
         self.patreon_status.setStyleSheet(f"color: {PALETTE['warning']};")
         patreon_login(
             self.browser_done_events["patreon"],
-            lambda s: QTimer.singleShot(0, lambda: self._on_patreon_cookie(s)),
+            lambda s: self._browser_login_payload.emit("patreon", s),
             self.browser_cancel_events["patreon"],
         )
 
@@ -2429,8 +2507,8 @@ class SponsorMainWindow(QMainWindow):
         if not self._login_flow_active.get("patreon"):
             self.patreon_btn.setEnabled(True)
             return
+        self._login_flow_active["patreon"] = False
         if s:
-            self._login_flow_active["patreon"] = False
             self.config.setdefault("patreon", {})["cookies"] = s
             save_config(self.config)
             self.patreon_status.setText("\u5df2\u767b\u5165")
@@ -2441,6 +2519,8 @@ class SponsorMainWindow(QMainWindow):
         self.patreon_btn.setEnabled(True)
 
     def _fanbox_login_start(self):
+        if ce := self.browser_cancel_events.get("fanbox"):
+            ce.set()
         self.browser_done_events["fanbox"] = threading.Event()
         self.browser_cancel_events["fanbox"] = threading.Event()
         self._login_flow_active["fanbox"] = True
@@ -2450,7 +2530,7 @@ class SponsorMainWindow(QMainWindow):
         self.fanbox_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fanbox_login(
             self.browser_done_events["fanbox"],
-            lambda s: QTimer.singleShot(0, lambda: self._on_fanbox_cookie(s)),
+            lambda s: self._browser_login_payload.emit("fanbox", s),
             self.browser_cancel_events["fanbox"],
         )
 
@@ -2475,6 +2555,8 @@ class SponsorMainWindow(QMainWindow):
         self.fanbox_btn.setEnabled(True)
 
     def _fantia_login_start(self):
+        if ce := self.browser_cancel_events.get("fantia"):
+            ce.set()
         self.browser_done_events["fantia"] = threading.Event()
         self.browser_cancel_events["fantia"] = threading.Event()
         self._login_flow_active["fantia"] = True
@@ -2484,7 +2566,7 @@ class SponsorMainWindow(QMainWindow):
         self.fantia_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fantia_login(
             self.browser_done_events["fantia"],
-            lambda s: QTimer.singleShot(0, lambda: self._on_fantia_session(s)),
+            lambda s: self._browser_login_payload.emit("fantia", s),
             self.browser_cancel_events["fantia"],
         )
 
@@ -2497,8 +2579,8 @@ class SponsorMainWindow(QMainWindow):
         if not self._login_flow_active.get("fantia"):
             self.fantia_btn.setEnabled(True)
             return
+        self._login_flow_active["fantia"] = False
         if s:
-            self._login_flow_active["fantia"] = False
             self.config.setdefault("fantia", {})["session_id"] = s
             save_config(self.config)
             self.fantia_status.setText("\u5df2\u767b\u5165")

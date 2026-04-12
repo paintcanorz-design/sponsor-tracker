@@ -8,7 +8,7 @@ class PatreonFetcher:
     def __init__(self, cookies: str, creator_page: str = None):
         """
         cookies: 瀏覽器登入後取得的 cookie 字串
-        creator_page: 創作者頁面 URL，例如 https://www.patreon.com/c/paintcan
+        creator_page: 創作者頁面 URL，例如 https://www.patreon.com/c/user
         """
         self.cookies = (cookies or "").strip()
         self.creator_page = (creator_page or "").strip() or None

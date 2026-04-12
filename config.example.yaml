@@ -11,7 +11,7 @@
 # Patreon (登入 Patreon 後由程式自動抓取 cookies)
 patreon:
   cookies: ""  # 使用「登入 Patreon」按鈕取得
-  creator_page: "https://www.patreon.com/c/paintcan"  # 你的創作者頁面 URL
+  creator_page: "https://www.patreon.com/c/user"  # 創作者後台／你的頁面（可自訂）
 
 # Fanbox (從瀏覽器取得 Cookie，登入後 F12 -> Application -> Cookies -> fanbox.cc)
 fanbox:
@@ -33,3 +33,4 @@ schedule:
 #   # discord_webhook_url: "https://discord.com/api/webhooks/數字/令牌"
 #   # daily_report_enabled: true
 #   # daily_report_time_jst: "09:00"   # 每日總覽報表（日本時間 JST），程式需保持執行
+#   # start_with_windows: true       # 開機自動啟動（僅 Windows，預設為開）

@@ -44,7 +44,7 @@ def run_update(config: dict):
     cookies = (patreon_cfg.get("cookies") or "").strip()
     if cookies and "xxx" not in cookies:
         try:
-            page_url = patreon_cfg.get("creator_page") or "https://www.patreon.com/c/paintcan"
+            page_url = patreon_cfg.get("creator_page") or "https://www.patreon.com/c/user"
             fetcher = PatreonFetcher(cookies, page_url)
             data = fetcher.fetch_sponsorship()
             if data:
