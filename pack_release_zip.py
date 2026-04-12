@@ -22,7 +22,8 @@ def main() -> int:
     out_dir = _ROOT / "release"
     out_dir.mkdir(exist_ok=True)
     ver = (APP_VERSION or "0").strip().replace("/", "-")
-    zip_path = out_dir / f"贊助額追蹤-v{ver}-Win64.zip"
+    # 檔名僅用 ASCII，避免 gh release upload 等工具誤判參數
+    zip_path = out_dir / f"sponsor-tracker-v{ver}-Win64.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in src.rglob("*"):
             try:
