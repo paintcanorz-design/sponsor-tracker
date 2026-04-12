@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -86,10 +87,14 @@ from src.discord_webhook import (
 from src.app_update import (
     configured_github_repo,
     current_app_version,
+    download_zip_and_extract,
     fetch_latest_release_tag,
+    fetch_lazy_update_plan,
     git_pull_project,
+    lazy_update_supported,
     project_has_git,
     releases_latest_url,
+    spawn_lazy_windows_updater,
     version_newer_than,
 )
 
@@ -771,6 +776,9 @@ class SponsorMainWindow(QMainWindow):
     _manual_update_done = Signal(object, bool)
     _manual_update_failed = Signal(str)
     _dashboard_data_ready = Signal(int, object, object, bool, object)
+    _oneclick_check_done = Signal(object)
+    _oneclick_dl_done = Signal(object)
+    _oneclick_dl_progress = Signal(int, int)
 
     def __init__(self):
         super().__init__()
@@ -807,6 +815,8 @@ class SponsorMainWindow(QMainWindow):
         self._increase_indicator_until = None
         self._sound_vol_timer: QTimer | None = None
         self._app_update_busy = False
+        self._oneclick_busy = False
+        self._oneclick_prog: QProgressDialog | None = None
         self._update_check_worker_done.connect(self._on_update_check_worker_done)
         self._browser_login_payload.connect(
             self._on_browser_login_payload, Qt.ConnectionType.QueuedConnection
@@ -815,6 +825,15 @@ class SponsorMainWindow(QMainWindow):
         self._manual_update_failed.connect(self._update_fail, Qt.ConnectionType.QueuedConnection)
         self._dashboard_data_ready.connect(
             self._on_dashboard_data_ready, Qt.ConnectionType.QueuedConnection
+        )
+        self._oneclick_check_done.connect(
+            self._on_oneclick_check_done, Qt.ConnectionType.QueuedConnection
+        )
+        self._oneclick_dl_done.connect(
+            self._on_oneclick_dl_done, Qt.ConnectionType.QueuedConnection
+        )
+        self._oneclick_dl_progress.connect(
+            self._on_oneclick_dl_progress, Qt.ConnectionType.QueuedConnection
         )
 
         init_db()
@@ -1967,6 +1986,189 @@ class SponsorMainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _on_oneclick_update_clicked(self):
+        if self._oneclick_busy:
+            return
+        if not lazy_update_supported():
+            QMessageBox.information(
+                self,
+                "\u4e00\u9375\u66f4\u65b0",
+                "\u50c5\u9069\u7528\u65bc Windows \u4e0b\u4f7f\u7528\u514d\u5b89\u88dd exe \u6642\u3002",
+            )
+            return
+        repo = configured_github_repo()
+        if not repo:
+            QMessageBox.warning(
+                self,
+                "\u4e00\u9375\u66f4\u65b0",
+                "\u672a\u8a2d\u5b9a GitHub \u5009\u5eab\uff08src/version.py GITHUB_REPO\uff09\u3002",
+            )
+            return
+        self._oneclick_busy = True
+        self._app_oneclick_btn.setEnabled(False)
+
+        def check_work():
+            import traceback
+
+            try:
+                plan, err = fetch_lazy_update_plan(repo)
+                if err:
+                    self._oneclick_check_done.emit({"ok": False, "error": err})
+                    return
+                if plan and plan.get("kind") == "uptodate":
+                    self._oneclick_check_done.emit(
+                        {
+                            "ok": True,
+                            "uptodate": True,
+                            "latest": str(plan.get("latest") or ""),
+                        }
+                    )
+                    return
+                if plan and plan.get("kind") == "update":
+                    self._oneclick_check_done.emit({"ok": True, "uptodate": False, "plan": plan})
+                    return
+                self._oneclick_check_done.emit({"ok": False, "error": "\u7121\u6548\u7684\u66f4\u65b0\u8cc7\u8a0a\u3002"})
+            except Exception:
+                self._oneclick_check_done.emit(
+                    {"ok": False, "error": traceback.format_exc()}
+                )
+
+        threading.Thread(target=check_work, daemon=True).start()
+
+    def _on_oneclick_check_done(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            return
+        if not payload.get("ok"):
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            QMessageBox.critical(
+                self,
+                "\u4e00\u9375\u66f4\u65b0",
+                str(payload.get("error") or "\u672a\u77e5\u932f\u8aa4"),
+            )
+            return
+        if payload.get("uptodate"):
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            QMessageBox.information(
+                self,
+                "\u4e00\u9375\u66f4\u65b0",
+                f"\u5df2\u662f\u6700\u65b0\u7248\u672c\uff08{str(payload.get('latest') or '')}\uff09\u3002",
+            )
+            return
+        plan = payload.get("plan")
+        if not isinstance(plan, dict):
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            return
+        latest = str(plan.get("latest") or "")
+        size = int(plan.get("size") or 0)
+        size_txt = f"\u7d04 {size / (1024 * 1024):.1f} MB" if size > 0 else "\u5927\u5c0f\u672a\u77e5"
+        q = QMessageBox.question(
+            self,
+            "\u4e00\u9375\u66f4\u65b0",
+            f"\u5075\u6e2c\u5230\u65b0\u7248\u672c\uff1a{latest}\uff08{size_txt}\uff09\u3002\n\n"
+            f"\u5c07\u4e0b\u8f09\u4e26\u8986\u5beb\u7a0b\u5f0f\u6a94\u6848\uff0c\u60a8\u7684\u8a2d\u5b9a\uff08config.yaml \u8207\u8cc7\u6599\u5eab\uff09\u6703\u4fdd\u7559\u3002\n"
+            f"\u7a0b\u5f0f\u5c07\u95dc\u9589\u5f8c\u81ea\u52d5\u5b8c\u6210\u4e26\u91cd\u958b\u3002\n\n"
+            f"\u662f\u5426\u7e7c\u7e8c\uff1f",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if q != QMessageBox.StandardButton.Yes:
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            return
+        self._start_oneclick_download(plan)
+
+    def _start_oneclick_download(self, plan: dict) -> None:
+        url = str(plan.get("url") or "").strip()
+        if not url:
+            self._oneclick_busy = False
+            self._app_oneclick_btn.setEnabled(True)
+            QMessageBox.warning(self, "\u4e00\u9375\u66f4\u65b0", "\u7121\u4e0b\u8f09\u7db2\u5740\u3002")
+            return
+        self._oneclick_prog = QProgressDialog(
+            "\u4e0b\u8f09\u66f4\u65b0\u4e2d\u2026",
+            None,
+            0,
+            100,
+            self,
+        )
+        self._oneclick_prog.setWindowTitle("\u4e00\u9375\u66f4\u65b0")
+        self._oneclick_prog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._oneclick_prog.setMinimumDuration(0)
+        self._oneclick_prog.setCancelButton(None)
+        self._oneclick_prog.setValue(0)
+        self._oneclick_prog.show()
+
+        exe_name = Path(sys.executable).name
+
+        def dl_work():
+            import traceback
+
+            try:
+
+                def prog(n: int, t: int) -> None:
+                    self._oneclick_dl_progress.emit(n, t)
+
+                staging, work_root, err = download_zip_and_extract(url, exe_name, prog)
+                if err:
+                    self._oneclick_dl_done.emit({"ok": False, "error": err})
+                    return
+                self._oneclick_dl_done.emit(
+                    {
+                        "ok": True,
+                        "staging": str(staging),
+                        "work_root": str(work_root),
+                    }
+                )
+            except Exception:
+                self._oneclick_dl_done.emit(
+                    {"ok": False, "error": traceback.format_exc()}
+                )
+
+        threading.Thread(target=dl_work, daemon=True).start()
+
+    def _on_oneclick_dl_progress(self, n: int, total: int) -> None:
+        if not self._oneclick_prog:
+            return
+        if total > 0:
+            self._oneclick_prog.setRange(0, total)
+            self._oneclick_prog.setValue(min(n, total))
+        else:
+            self._oneclick_prog.setRange(0, 0)
+
+    def _on_oneclick_dl_done(self, payload: object) -> None:
+        if self._oneclick_prog is not None:
+            self._oneclick_prog.close()
+            self._oneclick_prog = None
+        self._oneclick_busy = False
+        self._app_oneclick_btn.setEnabled(True)
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            QMessageBox.critical(
+                self,
+                "\u4e00\u9375\u66f4\u65b0",
+                str((payload or {}).get("error") or "\u4e0b\u8f09\u5931\u6557"),
+            )
+            return
+        staging_s = str(payload.get("staging") or "").strip()
+        work_s = str(payload.get("work_root") or "").strip()
+        if not staging_s or not work_s:
+            QMessageBox.critical(self, "\u4e00\u9375\u66f4\u65b0", "\u5167\u90e8\u8def\u5f91\u7121\u6548\u3002")
+            return
+        QMessageBox.information(
+            self,
+            "\u4e00\u9375\u66f4\u65b0",
+            "\u4e0b\u8f09\u5b8c\u6210\u3002\u6309\u300c\u78ba\u5b9a\u300d\u5f8c\u5c07\u95dc\u9589\u7a0b\u5f0f\u4e26\u5957\u7528\u66f4\u65b0\uff0c\u7136\u5f8c\u81ea\u52d5\u91cd\u958b\u3002",
+        )
+        ok, msg = spawn_lazy_windows_updater(Path(staging_s), Path(work_s))
+        if not ok:
+            QMessageBox.critical(self, "\u4e00\u9375\u66f4\u65b0", msg or "\u7121\u6cd5\u555f\u52d5\u66f4\u65b0\u52a9\u624b")
+            return
+        self._quit_fully()
+
     @staticmethod
     def _switch_is_on(checked: bool) -> bool:
         return bool(checked)
@@ -2034,10 +2236,22 @@ class SponsorMainWindow(QMainWindow):
         self._app_version_label = QLabel(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
         self._app_version_label.setObjectName("settingsFormLabel")
         vl.addWidget(self._app_version_label)
+        ver_btn_row = QHBoxLayout()
+        ver_btn_row.setSpacing(8)
         self._app_update_btn = QPushButton("\u6aa2\u67e5\u66f4\u65b0")
         self._app_update_btn.setMinimumHeight(36)
         self._app_update_btn.clicked.connect(self._on_app_update_clicked)
-        vl.addWidget(self._app_update_btn)
+        ver_btn_row.addWidget(self._app_update_btn, 1)
+        self._app_oneclick_btn = QPushButton("\u4e00\u9375\u66f4\u65b0\u7a0b\u5f0f")
+        self._app_oneclick_btn.setMinimumHeight(36)
+        self._app_oneclick_btn.clicked.connect(self._on_oneclick_update_clicked)
+        if not lazy_update_supported():
+            self._app_oneclick_btn.setEnabled(False)
+            self._app_oneclick_btn.setToolTip(
+                "\u50c5\u9069\u7528 Windows \u514d\u5b89\u88dd exe\uff1b\u958b\u767c\u6a21\u5f0f\u8acb\u7528\u300c\u6aa2\u67e5\u66f4\u65b0\u300d\u6216 git\u3002"
+            )
+        ver_btn_row.addWidget(self._app_oneclick_btn, 1)
+        vl.addLayout(ver_btn_row)
         left.addWidget(ver_card)
 
         self._add_settings_group(left, "\u5e73\u53f0\u767b\u5165")
