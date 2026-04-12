@@ -35,6 +35,23 @@ def _must_skip_file(path: Path) -> bool:
 
 # 與 exe 同層一併發佈（由專案根複製，確保 zip 內一定有）
 _BAT_SIDECAR = ("開啟exe前請開啟此檔案安裝所需環境.bat",)
+# 舊版曾一併打包，若仍留在 dist 會混進 zip，打包前刪除
+_OBSOLETE_BATS = (
+    "安裝瀏覽器登入環境.bat",
+    "安裝爬蟲環境.bat",
+)
+
+
+def _remove_obsolete_bats(src: Path) -> None:
+    for name in _OBSOLETE_BATS:
+        p = src / name
+        if not p.is_file():
+            continue
+        try:
+            p.unlink()
+            print(f"[提示] 已移除過時腳本：{name}", file=sys.stderr)
+        except OSError as e:
+            print(f"[警告] 無法刪除過時「{name}」：{e}", file=sys.stderr)
 
 
 def _copy_bat_scripts_into(src: Path) -> None:
@@ -62,6 +79,7 @@ def main() -> int:
     if src is None:
         print("找不到 dist\\贊助額追蹤 或「【請由此執行】贊助額追蹤」內的 exe，請先執行【一鍵打包】EXE.bat。", file=sys.stderr)
         return 1
+    _remove_obsolete_bats(src)
     _copy_bat_scripts_into(src)
     out_dir = _ROOT / "release"
     out_dir.mkdir(exist_ok=True)
