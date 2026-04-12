@@ -2317,15 +2317,29 @@ class SponsorMainWindow(QMainWindow):
             bl.addStretch()
             rl.addLayout(bl)
             acc_l.addWidget(roww)
-        left.addWidget(acc_card)
-
+        _login_tip_lines = [
+            "\u8acb\u5728\u5f48\u51fa\u7684\u700f\u89bd\u5668\u8996\u7a97\u5b8c\u6210\u767b\u5165\u5f8c\uff0c"
+            "\u56de\u5230\u672c\u7a0b\u5f0f\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d\u3002"
+            "\u82e5\u7db2\u7ad9\u4e0d\u652f\u63f4\u81ea\u52d5\u958b\u555f\u700f\u89bd\u5668\uff0c"
+            "\u8acb\u6539\u7528\u624b\u52d5\u8cbc Cookie \u6216\u7db2\u7ad9\u63d0\u4f9b\u7684\u767b\u5165\u65b9\u5f0f\u3002",
+        ]
         if not PLAYWRIGHT_AVAILABLE:
             for key in ("patreon", "fanbox", "fantia"):
                 getattr(self, f"{key}_btn").setEnabled(False)
                 getattr(self, f"{key}_logout_btn").setEnabled(False)
-            w = QLabel("Playwright \u672a\u5b89\u88dd\uff1aplaywright install chromium")
-            w.setStyleSheet(f"color: {PALETTE['warning']};")
-            left.addWidget(w)
+            _login_tip_lines.append(
+                "\n\n\u3010\u6ce8\u610f\u3011Playwright \u672a\u5b89\u88dd\uff0c"
+                "\u7121\u6cd5\u4f7f\u7528\u300c\u767b\u5165\u300d\u958b\u555f\u700f\u89bd\u5668\u3002"
+                "\u8acb\u57f7\u884c playwright install chromium\uff0c\u6216\u6539\u624b\u52d5\u8cbc Cookie\u3002"
+            )
+        _login_tip = QLabel("".join(_login_tip_lines))
+        _login_tip.setWordWrap(True)
+        _login_tip.setStyleSheet(
+            f"color: {PALETTE['warning']}; padding: 10px 12px; border-radius: 8px; font-size: 12px; "
+            f"border-left: 3px solid {PALETTE['warning']};"
+        )
+        acc_l.addWidget(_login_tip)
+        left.addWidget(acc_card)
 
         self._add_settings_group(right, "\u901a\u77e5\u97f3\u6548")
         preset_key = normalize_increase_sound_key(gui_sound.get("increase_sound"))
