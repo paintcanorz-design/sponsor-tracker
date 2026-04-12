@@ -12,6 +12,34 @@ else:
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
+
+def _install_playwright_browsers_cli() -> int:
+    """下載 Playwright 用 Chromium（設定內瀏覽器登入）。由「安裝瀏覽器登入環境.bat」呼叫。"""
+    print("正在安裝 Playwright 瀏覽器（Chromium），供「瀏覽器登入」使用。")
+    print("約數百 MB，需網路；若失敗可改用手動貼 Cookie。\n")
+    old = sys.argv[:]
+    try:
+        sys.argv = ["playwright", "install", "chromium"]
+        from playwright.__main__ import main as pw_main
+
+        pw_main()
+        return 0
+    except SystemExit as e:
+        c = e.code
+        if c is None:
+            return 0
+        return int(c) if isinstance(c, int) else 1
+    except Exception as e:
+        print(f"安裝失敗：{e}")
+        return 1
+    finally:
+        sys.argv = old
+
+
+if __name__ == "__main__" and "--install-playwright-browsers" in sys.argv:
+    sys.argv = [x for x in sys.argv if x != "--install-playwright-browsers"]
+    raise SystemExit(_install_playwright_browsers_cli())
+
 import launch_bootstrap
 
 launch_bootstrap.maybe_relaunch_with_py311(Path(__file__).resolve(), ROOT)

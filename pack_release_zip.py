@@ -2,6 +2,7 @@
 """將「【請由此執行】贊助額追蹤」打成 zip，供 GitHub Release 一鍵更新下載。"""
 from __future__ import annotations
 
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -32,6 +33,25 @@ def _must_skip_file(path: Path) -> bool:
     return False
 
 
+# 與 exe 同層一併發佈（由專案根複製，確保 zip 內一定有）
+_BAT_SIDECAR = (
+    "安裝瀏覽器登入環境.bat",
+    "開啟exe前請開啟此檔案安裝所需環境.bat",
+)
+
+
+def _copy_bat_scripts_into(src: Path) -> None:
+    for name in _BAT_SIDECAR:
+        root_f = _ROOT / name
+        if not root_f.is_file():
+            print(f"[警告] 專案根目錄缺少「{name}」，zip 將不含此腳本。", file=sys.stderr)
+            continue
+        try:
+            shutil.copy2(root_f, src / name)
+        except OSError as e:
+            print(f"[警告] 無法複製「{name}」：{e}", file=sys.stderr)
+
+
 def _pick_source_dir() -> Path | None:
     """優先使用 dist（僅 PyInstaller 產物）；否則用【請由此執行】並仍套用排除名單。"""
     for d in (_ROOT / "dist" / "贊助額追蹤", _ROOT / "【請由此執行】贊助額追蹤"):
@@ -45,6 +65,7 @@ def main() -> int:
     if src is None:
         print("找不到 dist\\贊助額追蹤 或「【請由此執行】贊助額追蹤」內的 exe，請先執行【一鍵打包】EXE.bat。", file=sys.stderr)
         return 1
+    _copy_bat_scripts_into(src)
     out_dir = _ROOT / "release"
     out_dir.mkdir(exist_ok=True)
     ver = (APP_VERSION or "0").strip().replace("/", "-")

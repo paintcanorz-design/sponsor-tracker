@@ -37,6 +37,8 @@ if not exist "%ABS_SRC%\贊助額追蹤.exe" (
     pause
     exit /b 1
 )
+copy /Y "%~dp0安裝瀏覽器登入環境.bat" "%ABS_SRC%\" >nul 2>&1
+copy /Y "%~dp0開啟exe前請開啟此檔案安裝所需環境.bat" "%ABS_SRC%\" >nul 2>&1
 robocopy "%ABS_SRC%" "%ABS_OUT%" /MIR /NFL /NDL /NJH /NJS /NP >nul
 set "RC=%ERRORLEVEL%"
 if %RC% GEQ 8 (
