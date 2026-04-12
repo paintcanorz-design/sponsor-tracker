@@ -2259,11 +2259,29 @@ class SponsorMainWindow(QMainWindow):
         acc_l = QVBoxLayout(acc_card)
         acc_l.setContentsMargins(0, 2, 0, 2)
         acc_l.setSpacing(0)
+        _plat_hint = QLabel(
+            "Google\u3001X\uff08Twitter\uff09\u7b49\u7db2\u7ad9\u53ef\u80fd\u9650\u5236\u6b64\u7a2e\u81ea\u52d5\u958b\u555f\u7684\u767b\u5165\u65b9\u5f0f\uff1b"
+            "\u8acb\u6539\u5728\u7db2\u9801\u4ee5\u5e33\u865f\u5bc6\u78bc\u6216\u901a\u884c\u91d1\u9470\u5b8c\u6210\u767b\u5165\u3002\n"
+            "\u767b\u5165\u5b8c\u6210\u5f8c\u8acb\u56de\u5230\u672c\u7a0b\u5f0f\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
+        )
+        _plat_hint.setWordWrap(True)
+        _plat_hint.setObjectName("settingsFormLabel")
+        _plat_hint.setStyleSheet(
+            f"font-size: 14px !important; "
+            f"padding: 12px 14px; margin: 8px 12px 0 12px; "
+            f"background-color: {PALETTE['bg_elevated']}; "
+            f"border-left: 3px solid {PALETTE['accent']}; border-radius: 6px;"
+        )
+        acc_l.addWidget(_plat_hint)
+        _plat_div = QFrame()
+        _plat_div.setObjectName("settingsDivider")
+        _plat_div.setFixedHeight(1)
+        acc_l.addWidget(_plat_div)
         for j, (name, desc, key, color) in enumerate(
             [
-                ("Patreon", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "patreon", PALETTE["patreon"]),
-                ("Fanbox", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "fanbox", PALETTE["fanbox"]),
-                ("Fantia", "\u700f\u89bd\u5668\u767b\u5165\u5f8c\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d", "fantia", PALETTE["fantia"]),
+                ("Patreon", "", "patreon", PALETTE["patreon"]),
+                ("Fanbox", "", "fanbox", PALETTE["fanbox"]),
+                ("Fantia", "", "fantia", PALETTE["fantia"]),
             ]
         ):
             if j > 0:
@@ -2291,10 +2309,11 @@ class SponsorMainWindow(QMainWindow):
             top.addWidget(st)
             setattr(self, f"{key}_status", st)
             rl.addLayout(top)
-            desc_l = QLabel(desc)
-            desc_l.setObjectName("settingsFormLabel")
-            desc_l.setWordWrap(True)
-            rl.addWidget(desc_l)
+            if (desc or "").strip():
+                desc_l = QLabel(desc)
+                desc_l.setObjectName("settingsFormLabel")
+                desc_l.setWordWrap(True)
+                rl.addWidget(desc_l)
             bl = QHBoxLayout()
             bl.setSpacing(8)
             btn = QPushButton("\u767b\u5165")
@@ -2317,29 +2336,15 @@ class SponsorMainWindow(QMainWindow):
             bl.addStretch()
             rl.addLayout(bl)
             acc_l.addWidget(roww)
-        _login_tip_lines = [
-            "\u8acb\u5728\u5f48\u51fa\u7684\u700f\u89bd\u5668\u8996\u7a97\u5b8c\u6210\u767b\u5165\u5f8c\uff0c"
-            "\u56de\u5230\u672c\u7a0b\u5f0f\u6309\u300c\u5df2\u5b8c\u6210\u767b\u5165\u300d\u3002"
-            "\u82e5\u7db2\u7ad9\u4e0d\u652f\u63f4\u81ea\u52d5\u958b\u555f\u700f\u89bd\u5668\uff0c"
-            "\u8acb\u6539\u7528\u624b\u52d5\u8cbc Cookie \u6216\u7db2\u7ad9\u63d0\u4f9b\u7684\u767b\u5165\u65b9\u5f0f\u3002",
-        ]
+        left.addWidget(acc_card)
+
         if not PLAYWRIGHT_AVAILABLE:
             for key in ("patreon", "fanbox", "fantia"):
                 getattr(self, f"{key}_btn").setEnabled(False)
                 getattr(self, f"{key}_logout_btn").setEnabled(False)
-            _login_tip_lines.append(
-                "\n\n\u3010\u6ce8\u610f\u3011Playwright \u672a\u5b89\u88dd\uff0c"
-                "\u7121\u6cd5\u4f7f\u7528\u300c\u767b\u5165\u300d\u958b\u555f\u700f\u89bd\u5668\u3002"
-                "\u8acb\u57f7\u884c playwright install chromium\uff0c\u6216\u6539\u624b\u52d5\u8cbc Cookie\u3002"
-            )
-        _login_tip = QLabel("".join(_login_tip_lines))
-        _login_tip.setWordWrap(True)
-        _login_tip.setStyleSheet(
-            f"color: {PALETTE['warning']}; padding: 10px 12px; border-radius: 8px; font-size: 12px; "
-            f"border-left: 3px solid {PALETTE['warning']};"
-        )
-        acc_l.addWidget(_login_tip)
-        left.addWidget(acc_card)
+            w = QLabel("Playwright \u672a\u5b89\u88dd\uff1aplaywright install chromium")
+            w.setStyleSheet(f"color: {PALETTE['warning']};")
+            left.addWidget(w)
 
         self._add_settings_group(right, "\u901a\u77e5\u97f3\u6548")
         preset_key = normalize_increase_sound_key(gui_sound.get("increase_sound"))
