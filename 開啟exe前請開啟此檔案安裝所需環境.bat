@@ -11,7 +11,6 @@ echo.
 echo 即將下載 Playwright 用 Chromium（設定內瀏覽器登入需要），約數百 MB，需網路。
 echo 若不需要瀏覽器登入可略過，改用手動貼 Cookie。
 echo.
-pause
 "%EXE%" --install-playwright-browsers
 set "RC=%ERRORLEVEL%"
 echo.
@@ -21,5 +20,5 @@ if %RC% neq 0 (
     echo 完成。接下來可雙擊贊助額追蹤.exe；瀏覽器登入請到設定操作。
 )
 echo.
-pause
+timeout /t 6 /nobreak >nul
 exit /b %RC%
