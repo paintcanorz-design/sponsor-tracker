@@ -11,7 +11,7 @@ from functools import partial
 from datetime import timedelta
 from pathlib import Path
 from PySide6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QValueAxis
-from PySide6.QtCore import QEvent, QPoint, QRect, QDateTime, QMargins, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPoint, QRect, QDateTime, QMargins, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -752,6 +752,9 @@ class CompactFloatWindow(QWidget):
 
 
 class SponsorMainWindow(QMainWindow):
+    """\u8de8\u57f7\u7dd2\u7528\uff1a\u7248\u672c\u6aa2\u67e5\u5de5\u4f5c\u7d50\u679c\u5fc5\u9808\u56de\u5230\u4e3b\u57f7\u7dd2\u986f\u793a\u5c0d\u8a71\u6846\uff08\u4e0d\u53ef\u5728\u5de5\u4f5c\u57f7\u7dd2\u7528 QTimer.singleShot\u3002\uff09"""
+    _update_check_worker_done = Signal(object)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("\u8d0a\u52a9\u984d\u8ffd\u8e64")
@@ -786,6 +789,7 @@ class SponsorMainWindow(QMainWindow):
         self._increase_indicator_until = None
         self._sound_vol_timer: QTimer | None = None
         self._app_update_busy = False
+        self._update_check_worker_done.connect(self._on_update_check_worker_done)
 
         init_db()
         self._build_ui()
@@ -1782,6 +1786,115 @@ class SponsorMainWindow(QMainWindow):
         self.update_btn.setEnabled(True)
         QMessageBox.critical(self, "\u66f4\u65b0\u5931\u6557", msg or "\u672a\u77e5\u932f\u8aa4")
 
+    def _msgbox_version_check_new_release(self, latest: str, ver_local: str) -> bool:
+        """\u767c\u73fe\u8f03\u65b0\u7248\u672c\u6642\u8a62\u554f\u662f\u5426\u524d\u5f80\u4e0b\u8f09\u3002\u56de\u50b3 True \u8868\u793a\u958b\u555f\u700f\u89bd\u5668\u3002"""
+        mb = QMessageBox(self)
+        mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+        mb.setIcon(QMessageBox.Icon.Question)
+        mb.setText(
+            f"\u767c\u73fe\u8f03\u65b0\u7684\u767c\u884c\u7248\u672c\uff1a<b>{html.escape(latest)}</b>"
+        )
+        mb.setTextFormat(Qt.TextFormat.RichText)
+        mb.setInformativeText(
+            f"\u60a8\u6b64\u8655\u986f\u793a\u7684\u7248\u672c\u7de8\u865f\u70ba\uff1a{html.escape(ver_local)}\n\n"
+            "\u662f\u5426\u958b\u555f\u700f\u89bd\u5668\u524d\u5f80 GitHub Release \u4e0b\u8f09\u9801\u9762\uff1f"
+        )
+        btn_dl = mb.addButton("\u524d\u5f80\u4e0b\u8f09", QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("\u7a0d\u5f8c\u518d\u8aaa", QMessageBox.ButtonRole.RejectRole)
+        mb.setDefaultButton(btn_dl)
+        mb.exec()
+        return mb.clickedButton() == btn_dl
+
+    def _msgbox_version_check_uptodate(self, latest: str, ver_local: str) -> None:
+        mb = QMessageBox(self)
+        mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+        mb.setIcon(QMessageBox.Icon.Information)
+        mb.setText("\u5df2\u70ba\u6700\u65b0\u7248\u672c")
+        mb.setInformativeText(
+            f"\u60a8\u4f7f\u7528\u7684\u7a0b\u5f0f\u7248\u672c\u5df2\u8207 GitHub \u4e0a\u6700\u65b0 Release \u4e00\u81f4\uff0c\u7121\u9700\u66f4\u65b0\u3002\n\n"
+            f"\u76ee\u524d\u7248\u672c\uff1a{ver_local}\n"
+            f"\u7dda\u4e0a\u6a19\u7c64\uff1a{latest}"
+        )
+        mb.setStandardButtons(QMessageBox.StandardButton.Ok)
+        mb.exec()
+
+    def _on_update_check_worker_done(self, payload: object) -> None:
+        """\u5728\u4e3b\u57f7\u7dd2\u57f7\u884c\uff08\u7531 Signal \u6392\u968a\u9001\u905e\uff09\u3002"""
+        self._app_update_busy = False
+        self._app_update_btn.setEnabled(True)
+        if not isinstance(payload, dict):
+            QMessageBox.critical(
+                self,
+                "\u7248\u672c\u6aa2\u67e5",
+                f"\u5167\u90e8\u932f\u8aa4\uff08\u7121\u6548\u8f38\u51fa\uff09\uff1a{payload!r}",
+            )
+            return
+        if payload.get("exc"):
+            detail = (payload.get("trace") or payload.get("exc") or "").strip()
+            QMessageBox.critical(
+                self,
+                "\u7248\u672c\u6aa2\u67e5",
+                f"\u6aa2\u67e5\u6642\u767c\u751f\u932f\u8aa4\uff1a\n{detail}",
+            )
+            return
+
+        has_git = bool(payload.get("has_git"))
+        repo = str(payload.get("repo") or "")
+        git_ok = payload.get("git_ok")
+        git_msg = str(payload.get("git_msg") or "")
+        latest = payload.get("latest")
+        api_err = payload.get("api_err")
+
+        self._app_version_label.setText(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
+        ver_local = current_app_version()
+
+        if has_git:
+            if git_ok:
+                box = QMessageBox(self)
+                box.setWindowTitle("\u539f\u59cb\u78bc\u540c\u6b65")
+                box.setIcon(QMessageBox.Icon.Information)
+                box.setText(
+                    "\u7a0b\u5f0f\u539f\u59cb\u78bc\u5df2\u8207\u7dda\u4e0a\u5009\u5eab\u540c\u6b65\u3002\n"
+                    "\uff08\u82e5\u7121\u65b0\u7248\u672c\uff0c\u8868\u793a\u60a8\u5df2\u4f7f\u7528\u6700\u65b0\u5167\u5bb9\u3002\uff09"
+                )
+                box.exec()
+            else:
+                QMessageBox.critical(self, "\u539f\u59cb\u78bc\u540c\u6b65", git_msg)
+
+        if not repo:
+            if not has_git:
+                mb = QMessageBox(self)
+                mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+                mb.setIcon(QMessageBox.Icon.Warning)
+                mb.setText("\u7121\u6cd5\u6aa2\u67e5\u66f4\u65b0")
+                mb.setInformativeText(
+                    "\u672a\u8a2d\u5b9a\u66f4\u65b0\u4f86\u6e90\uff0c\u6216\u672a\u4ee5 git \u53d6\u5f97\u5c08\u6848\u3002\n"
+                    "\u8acb\u806f\u7e6b\u767c\u884c\u65b9\u6216\u7dad\u8b77\u8005\u53d6\u5f97\u66f4\u65b0\u65b9\u5f0f\u3002"
+                )
+                mb.setStandardButtons(QMessageBox.StandardButton.Ok)
+                mb.exec()
+            return
+
+        if latest is None:
+            mb = QMessageBox(self)
+            mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+            mb.setIcon(QMessageBox.Icon.Warning)
+            mb.setText("\u7121\u6cd5\u6bd4\u5c0d\u767c\u884c\u7248\u672c")
+            detail = (api_err or "").strip() or "\u7121\u6cd5\u9023\u7dda\u81f3 GitHub\u3002"
+            mb.setInformativeText(
+                f"{detail}\n\n"
+                "\u82e5\u5009\u5eab\u5c1a\u672a\u5efa\u7acb Release\uff0c\u5c07\u7121\u6cd5\u6bd4\u5c0d\u7248\u672c\u865f\u3002"
+            )
+            mb.setStandardButtons(QMessageBox.StandardButton.Ok)
+            mb.exec()
+            return
+
+        if version_newer_than(str(latest), ver_local):
+            if self._msgbox_version_check_new_release(str(latest), ver_local):
+                QDesktopServices.openUrl(QUrl(releases_latest_url(repo)))
+        else:
+            self._msgbox_version_check_uptodate(str(latest), ver_local)
+
     def _on_app_update_clicked(self):
         if self._app_update_busy:
             return
@@ -1791,71 +1904,31 @@ class SponsorMainWindow(QMainWindow):
         repo = configured_github_repo()
 
         def work():
-            git_ok: bool | None = None
-            git_msg = ""
-            if has_git:
-                git_ok, git_msg = git_pull_project()
-            latest: str | None = None
-            api_err: str | None = None
-            if repo:
-                latest, api_err = fetch_latest_release_tag(repo)
+            import traceback
 
-            def done():
-                self._app_update_busy = False
-                self._app_update_btn.setEnabled(True)
-                self._app_version_label.setText(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
-                ver_local = current_app_version()
-
+            try:
+                git_ok: bool | None = None
+                git_msg = ""
                 if has_git:
-                    if git_ok:
-                        box = QMessageBox(self)
-                        box.setWindowTitle("\u7a0b\u5f0f\u66f4\u65b0")
-                        box.setIcon(QMessageBox.Icon.Information)
-                        box.setText(git_msg or "git pull \u5b8c\u6210\u3002")
-                        box.setInformativeText(
-                            "\u82e5\u4f9d\u8cf4\u5957\u4ef6\u6709\u8b8a\u66f4\uff0c\u8acb\u5728\u5c08\u6848\u76ee\u9304\u57f7\u884c\uff1a\n"
-                            "pip install -r requirements.txt"
-                        )
-                        box.exec()
-                    else:
-                        QMessageBox.critical(self, "\u7a0b\u5f0f\u66f4\u65b0", git_msg)
-
-                if not repo:
-                    if not has_git:
-                        QMessageBox.information(
-                            self,
-                            "\u7a0b\u5f0f\u66f4\u65b0",
-                            "\u672a\u8a2d\u5b9a GITHUB_REPO\u3002\u8acb\u7de8\u8f2f src/version.py \u586b\u5165\u5009\u5eab\uff08\u5e33\u865f/\u540d\u7a31\uff09\uff0c\n"
-                            "\u6216\u4f7f\u7528 git clone \u53d6\u5f97\u5c08\u6848\u5f8c\u518d\u8a66\u3002",
-                        )
-                    return
-
-                if latest is None:
-                    if api_err and not has_git:
-                        QMessageBox.warning(self, "\u7a0b\u5f0f\u66f4\u65b0", api_err)
-                    return
-
-                if version_newer_than(latest, ver_local):
-                    ans = QMessageBox.question(
-                        self,
-                        "\u7a0b\u5f0f\u66f4\u65b0",
-                        f"\u767c\u73fe\u8f03\u65b0 Release\uff1a{latest}\n"
-                        f"\uff08\u6b64\u7a0b\u5f0f\u7248\u672c\u5b57\u4e32\uff1a{ver_local}\uff09\n\n"
-                        "\u662f\u5426\u958b\u555f\u4e0b\u8f09\u9801\u9762\uff1f",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.Yes,
-                    )
-                    if ans == QMessageBox.StandardButton.Yes:
-                        QDesktopServices.openUrl(QUrl(releases_latest_url(repo)))
-                elif not has_git:
-                    QMessageBox.information(
-                        self,
-                        "\u7a0b\u5f0f\u66f4\u65b0",
-                        f"\u8207 GitHub \u6700\u65b0 Release \u6a19\u7c64\u4e00\u81f4\u6216\u5df2\u66f4\u65b0\u3002\n"
-                        f"\uff08Release\uff1a{latest}\uff09",
-                    )
-
-            QTimer.singleShot(0, done)
+                    git_ok, git_msg = git_pull_project()
+                latest: str | None = None
+                api_err: str | None = None
+                if repo:
+                    latest, api_err = fetch_latest_release_tag(repo)
+                self._update_check_worker_done.emit(
+                    {
+                        "has_git": has_git,
+                        "repo": repo,
+                        "git_ok": git_ok,
+                        "git_msg": git_msg,
+                        "latest": latest,
+                        "api_err": api_err,
+                    }
+                )
+            except Exception as e:
+                self._update_check_worker_done.emit(
+                    {"exc": repr(e), "trace": traceback.format_exc()}
+                )
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1913,11 +1986,7 @@ class SponsorMainWindow(QMainWindow):
         sl.addWidget(self.update_status)
         left.addWidget(sync_card)
 
-        self._add_settings_group(
-            left,
-            "\u7a0b\u5f0f\u7248\u672c",
-            "\u82e5\u4f7f\u7528 git clone\uff0c\u6703\u57f7\u884c git pull\uff1b\u4e26\u53ef\u5c0d\u7167 GitHub Releases\uff08\u8acb\u5728 src/version.py \u8a2d\u5b9a GITHUB_REPO\uff09\u3002",
-        )
+        self._add_settings_group(left, "\u7a0b\u5f0f\u7248\u672c")
         ver_card = _make_settings_group_card(card_parent)
         vl = QVBoxLayout(ver_card)
         vl.setContentsMargins(14, 12, 14, 12)
@@ -1925,7 +1994,7 @@ class SponsorMainWindow(QMainWindow):
         self._app_version_label = QLabel(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
         self._app_version_label.setObjectName("settingsFormLabel")
         vl.addWidget(self._app_version_label)
-        self._app_update_btn = QPushButton("\u4e00\u9375\u66f4\u65b0\u7a0b\u5f0f")
+        self._app_update_btn = QPushButton("\u6aa2\u67e5\u66f4\u65b0")
         self._app_update_btn.setMinimumHeight(36)
         self._app_update_btn.clicked.connect(self._on_app_update_clicked)
         vl.addWidget(self._app_update_btn)
@@ -1995,24 +2064,6 @@ class SponsorMainWindow(QMainWindow):
             rl.addLayout(bl)
             acc_l.addWidget(roww)
         left.addWidget(acc_card)
-
-        self._add_settings_group(
-            left,
-            "\u8cc7\u6599\u6e05\u9664",
-            "\u522a\u9664\u6240\u6709\u5e73\u53f0\u7684\u767b\u5165\u8cc7\u6599\uff0c\u4e26\u6e05\u7a7a\u8cc7\u6599\u5eab\u5167\u7684\u66f4\u65b0\u8a18\u9304\uff08\u8d0a\u52a9\u984d\u6b77\u53f2\u8207\u6bcf\u65e5\u6458\u8981\uff09\u3002",
-        )
-        purge_card = _make_settings_group_card(card_parent)
-        pr = QVBoxLayout(purge_card)
-        pr.setContentsMargins(14, 12, 14, 12)
-        pr.setSpacing(10)
-        purge_btn = QPushButton("\u5fb9\u5e95\u6e05\u9664\u767b\u5165\u8207\u66f4\u65b0\u8a18\u9304")
-        purge_btn.setStyleSheet(
-            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
-            f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
-        )
-        purge_btn.clicked.connect(self._master_clear_login_and_history)
-        pr.addWidget(purge_btn)
-        left.addWidget(purge_card)
 
         if not PLAYWRIGHT_AVAILABLE:
             for key in ("patreon", "fanbox", "fantia"):
@@ -2121,6 +2172,25 @@ class SponsorMainWindow(QMainWindow):
             self._sw_min_tray.setEnabled(False)
             self._sw_start_tray.setEnabled(False)
         right.addWidget(tray_card)
+
+        self._add_settings_group(
+            right,
+            "\u8cc7\u6599\u6e05\u9664",
+            "\u522a\u9664\u6240\u6709\u5e73\u53f0\u7684\u767b\u5165\u8cc7\u6599\uff0c\u4e26\u6e05\u7a7a\u8cc7\u6599\u5eab\u5167\u7684\u66f4\u65b0\u8a18\u9304\uff08\u8d0a\u52a9\u984d\u6b77\u53f2\u8207\u6bcf\u65e5\u6458\u8981\uff09\u3002",
+        )
+        purge_card = _make_settings_group_card(card_parent)
+        pr = QVBoxLayout(purge_card)
+        pr.setContentsMargins(14, 12, 14, 12)
+        pr.setSpacing(10)
+        purge_btn = QPushButton("\u5fb9\u5e95\u6e05\u9664\u767b\u5165\u8207\u66f4\u65b0\u8a18\u9304")
+        purge_btn.setStyleSheet(
+            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
+            f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
+        )
+        purge_btn.clicked.connect(self._master_clear_login_and_history)
+        pr.addWidget(purge_btn)
+        right.addWidget(purge_card)
+
         left.addStretch(1)
         right.addStretch(1)
 

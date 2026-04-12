@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import requests
@@ -29,13 +30,23 @@ def project_has_git() -> bool:
     return (project_root() / ".git").is_dir()
 
 
+def _subprocess_run_kw() -> dict:
+    """Windows GUI \u61c9\u7528\u7a0b\u5f0f\u57f7\u884c git \u6642\u52a0\u6b64\u65d7\u6a19\uff0c\u907f\u514d\u9583\u73fe\u63a7\u5236\u53f0\u8996\u7a97\u3002"""
+    if sys.platform != "win32":
+        return {}
+    # Python 3.7+：不\u958b\u65b0\u63a7\u5236\u53f0\u8996\u7a97\uff08\u8207 pythonw / PyInstaller \u4e00\u81f4\uff09
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def git_pull_project() -> tuple[bool, str]:
     root = project_root()
     if not (root / ".git").is_dir():
         return False, "此目錄沒有 .git（若不是用 git clone，無法以 git 更新）。"
     exe = shutil.which("git")
     if not exe:
-        return False, "找不到 git 指令，請安裝 Git for Windows 後再試。"
+        return False, "找不到 git 指令，請安裝 Git for Windows 後在 PATH 中提供 git.exe。"
     try:
         r = subprocess.run(
             [exe, "-C", str(root), "pull", "--ff-only"],
@@ -44,6 +55,7 @@ def git_pull_project() -> tuple[bool, str]:
             timeout=120,
             encoding="utf-8",
             errors="replace",
+            **_subprocess_run_kw(),
         )
     except subprocess.TimeoutExpired:
         return False, "git pull 逾時。"
