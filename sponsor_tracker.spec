@@ -58,6 +58,7 @@ a = Analysis(
         "src.qt_app.shared",
         "PySide6.QtCharts",
         "src.auth.browser_login",
+        "src.playwright_frozen_env",
         "src.fetchers",
         "src.fetchers.patreon_fetcher",
         "src.fetchers.fanbox_fetcher",

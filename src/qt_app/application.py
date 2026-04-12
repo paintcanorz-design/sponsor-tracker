@@ -771,7 +771,7 @@ class SponsorMainWindow(QMainWindow):
     """\u8de8\u57f7\u7dd2\u7528\uff1a\u7248\u672c\u6aa2\u67e5\u5de5\u4f5c\u7d50\u679c\u5fc5\u9808\u56de\u5230\u4e3b\u57f7\u7dd2\u986f\u793a\u5c0d\u8a71\u6846\uff08\u4e0d\u53ef\u5728\u5de5\u4f5c\u57f7\u7dd2\u7528 QTimer.singleShot\u3002\uff09"""
     _update_check_worker_done = Signal(object)
     # Playwright \u5728\u80cc\u666f\u57f7\u7dd2\u56de\u547c cookie \u6642\uff0c\u5fc5\u9808\u7528 Signal \u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u53ef\u5728\u8a72\u57f7\u7dd2 QTimer.singleShot\uff09\u3002
-    _browser_login_payload = Signal(str, str)
+    _browser_login_payload = Signal(str, int, str)
     # \u80cc\u666f\u57f7\u7dd2\u5b8c\u6210\u8cc7\u6599\u64f7\u53d6\u5f8c\u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u7528 QTimer.singleShot\uff09
     _manual_update_done = Signal(object, bool)
     _manual_update_failed = Signal(str)
@@ -803,6 +803,7 @@ class SponsorMainWindow(QMainWindow):
         self.browser_done_events: dict = {}
         self.browser_cancel_events: dict[str, threading.Event] = {}
         self._login_flow_active = {"patreon": False, "fanbox": False, "fantia": False}
+        self._browser_login_generation = {"patreon": 0, "fanbox": 0, "fantia": 0}
         self._stack: QStackedWidget | None = None
         self._btn_settings_nav: QPushButton | None = None
         self._compact_win: CompactFloatWindow | None = None
@@ -2305,6 +2306,7 @@ class SponsorMainWindow(QMainWindow):
                 logged = bool((cfg.get("session_id") or "").strip() and "\u4f60\u7684" not in (cfg.get("session_id") or ""))
             st = QLabel("\u5df2\u767b\u5165" if logged else "\u672a\u767b\u5165")
             st.setStyleSheet(f"color: {PALETTE['success'] if logged else PALETTE['text_tertiary']};")
+            st.setToolTip("")
             top.addStretch()
             top.addWidget(st)
             setattr(self, f"{key}_status", st)
@@ -2683,6 +2685,7 @@ class SponsorMainWindow(QMainWindow):
         st = getattr(self, f"{key}_status")
         st.setText("\u672a\u767b\u5165")
         st.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
+        st.setToolTip("")
         getattr(self, f"{key}_btn").setEnabled(True)
         getattr(self, f"{key}_done_btn").setEnabled(False)
 
@@ -2706,8 +2709,13 @@ class SponsorMainWindow(QMainWindow):
         self._refresh_dashboard()
 
     # --- login ---
-    def _on_browser_login_payload(self, platform: str, payload: str) -> None:
-        """\u7531 Signal \u5f9e Playwright \u57f7\u7dd2\u56de\u5230\u4e3b\u57f7\u7dd2\u8655\u7406\u3002"""
+    def _on_browser_login_payload(self, platform: str, generation: int, payload: str) -> None:
+        """\u7531 Signal \u5f9e Playwright \u57f7\u7dd2\u56de\u5230\u4e3b\u57f7\u7dd2\u8655\u7406\u3002
+
+        generation \u8207\u7576\u524d\u767b\u5165\u6b21\u6578\u4e00\u81f4\u624d\u8655\u7406\uff0c\u907f\u514d\u91cd\u6309\u300c\u767b\u5165\u300d\u6216\u820a\u57f7\u7dd2\u5148\u56de\u50b3\u7a7a\u503c\u6642\u8aa4\u6e05\u72c0\u614b\u3002
+        """
+        if self._browser_login_generation.get(platform) != generation:
+            return
         if platform == "patreon":
             self._on_patreon_cookie(payload)
         elif platform == "fanbox":
@@ -2720,6 +2728,8 @@ class SponsorMainWindow(QMainWindow):
             ce.set()
         self.browser_done_events["patreon"] = threading.Event()
         self.browser_cancel_events["patreon"] = threading.Event()
+        self._browser_login_generation["patreon"] += 1
+        _gen = self._browser_login_generation["patreon"]
         self._login_flow_active["patreon"] = True
         self.patreon_btn.setEnabled(False)
         self.patreon_done_btn.setEnabled(True)
@@ -2727,7 +2737,7 @@ class SponsorMainWindow(QMainWindow):
         self.patreon_status.setStyleSheet(f"color: {PALETTE['warning']};")
         patreon_login(
             self.browser_done_events["patreon"],
-            lambda s: self._browser_login_payload.emit("patreon", s),
+            lambda s, g=_gen: self._browser_login_payload.emit("patreon", g, s),
             self.browser_cancel_events["patreon"],
         )
 
@@ -2746,9 +2756,15 @@ class SponsorMainWindow(QMainWindow):
             save_config(self.config)
             self.patreon_status.setText("\u5df2\u767b\u5165")
             self.patreon_status.setStyleSheet(f"color: {PALETTE['success']};")
+            self.patreon_status.setToolTip("")
         else:
-            self.patreon_status.setText("\u5931\u6557\uff0c\u8acb\u91cd\u8a66")
+            self.patreon_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
             self.patreon_status.setStyleSheet(f"color: {PALETTE['error']};")
+            self.patreon_status.setToolTip(
+                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Patreon \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
+                "\u82e5\u7db2\u7ad9\u4e0d\u5141\u8a31\u6b64\u65b9\u5f0f\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a Cookie\u3002"
+                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
+            )
         self.patreon_btn.setEnabled(True)
 
     def _fanbox_login_start(self):
@@ -2756,6 +2772,8 @@ class SponsorMainWindow(QMainWindow):
             ce.set()
         self.browser_done_events["fanbox"] = threading.Event()
         self.browser_cancel_events["fanbox"] = threading.Event()
+        self._browser_login_generation["fanbox"] += 1
+        _gen = self._browser_login_generation["fanbox"]
         self._login_flow_active["fanbox"] = True
         self.fanbox_btn.setEnabled(False)
         self.fanbox_done_btn.setEnabled(True)
@@ -2763,7 +2781,7 @@ class SponsorMainWindow(QMainWindow):
         self.fanbox_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fanbox_login(
             self.browser_done_events["fanbox"],
-            lambda s: self._browser_login_payload.emit("fanbox", s),
+            lambda s, g=_gen: self._browser_login_payload.emit("fanbox", g, s),
             self.browser_cancel_events["fanbox"],
         )
 
@@ -2782,9 +2800,15 @@ class SponsorMainWindow(QMainWindow):
             save_config(self.config)
             self.fanbox_status.setText("\u5df2\u767b\u5165")
             self.fanbox_status.setStyleSheet(f"color: {PALETTE['success']};")
+            self.fanbox_status.setToolTip("")
         else:
-            self.fanbox_status.setText("\u5931\u6557\uff0c\u8acb\u91cd\u8a66")
+            self.fanbox_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
             self.fanbox_status.setStyleSheet(f"color: {PALETTE['error']};")
+            self.fanbox_status.setToolTip(
+                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Fanbox\uff0fPixiv \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
+                "\u82e5\u7db2\u7ad9\u4e0d\u5141\u8a31\u6b64\u65b9\u5f0f\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a Cookie\u3002"
+                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
+            )
         self.fanbox_btn.setEnabled(True)
 
     def _fantia_login_start(self):
@@ -2792,6 +2816,8 @@ class SponsorMainWindow(QMainWindow):
             ce.set()
         self.browser_done_events["fantia"] = threading.Event()
         self.browser_cancel_events["fantia"] = threading.Event()
+        self._browser_login_generation["fantia"] += 1
+        _gen = self._browser_login_generation["fantia"]
         self._login_flow_active["fantia"] = True
         self.fantia_btn.setEnabled(False)
         self.fantia_done_btn.setEnabled(True)
@@ -2799,7 +2825,7 @@ class SponsorMainWindow(QMainWindow):
         self.fantia_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fantia_login(
             self.browser_done_events["fantia"],
-            lambda s: self._browser_login_payload.emit("fantia", s),
+            lambda s, g=_gen: self._browser_login_payload.emit("fantia", g, s),
             self.browser_cancel_events["fantia"],
         )
 
@@ -2818,9 +2844,15 @@ class SponsorMainWindow(QMainWindow):
             save_config(self.config)
             self.fantia_status.setText("\u5df2\u767b\u5165")
             self.fantia_status.setStyleSheet(f"color: {PALETTE['success']};")
+            self.fantia_status.setToolTip("")
         else:
-            self.fantia_status.setText("\u5931\u6557\uff0c\u8acb\u91cd\u8a66")
+            self.fantia_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
             self.fantia_status.setStyleSheet(f"color: {PALETTE['error']};")
+            self.fantia_status.setToolTip(
+                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Fantia \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
+                "\u82e5\u7121\u6cd5\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a _session_id\u3002"
+                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
+            )
         self.fantia_btn.setEnabled(True)
 
 def main():

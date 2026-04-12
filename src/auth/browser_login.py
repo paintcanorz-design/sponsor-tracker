@@ -9,6 +9,13 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
+try:
+    from src.playwright_frozen_env import apply as _apply_playwright_frozen_env
+
+    _apply_playwright_frozen_env()
+except Exception:
+    pass
+
 
 def _wait_done_or_cancel(
     done: threading.Event, cancel: threading.Event, total_timeout: float = 600.0

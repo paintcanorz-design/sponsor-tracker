@@ -12,6 +12,13 @@ else:
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
+try:
+    from src.playwright_frozen_env import apply as _apply_playwright_frozen_env
+
+    _apply_playwright_frozen_env()
+except Exception:
+    pass
+
 
 def _install_playwright_browsers_cli() -> int:
     """下載 Playwright 用 Chromium（設定內瀏覽器登入）。由「開啟exe前請開啟此檔案安裝所需環境.bat」呼叫。"""
