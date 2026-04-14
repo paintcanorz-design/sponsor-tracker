@@ -293,44 +293,22 @@ def _qt_play_wav_file(wav_path: Path, vol01: float) -> bool:
 
 
 def play_increase_sound(config: dict | None = None):
+    """Fixed: system notification-style cue at 50% volume (bundled WAV if present). No user sound settings."""
     cfg = config or {}
     gui = cfg.get("gui") or {}
-    vol01 = _gui_increase_sound_volume_01(gui)
-    if vol01 <= 0:
+    if gui.get("sounds_muted"):
         return
-
-    wav_path = _resolve_increase_sound_wav_path(gui.get("increase_sound_wav") or "")
-    preset = normalize_increase_sound_key(gui.get("increase_sound"))
-    if wav_path is None and preset == "alert_bundle":
-        cands = bundled_alert_wav_candidates()
-        if cands:
-            wav_path = cands[0]
-
-    if wav_path is not None:
+    vol01 = 0.5
+    for wav_path in bundled_alert_wav_candidates():
         if _qt_play_wav_file(wav_path, vol01):
             return
         if sys.platform == "win32" and _winsound_play_wav_file(wav_path, vol01):
             return
-
-    if preset in ("none", "off", "0", "false"):
-        return
-    if preset == "alert_bundle":
-        return
-
     try:
         if sys.platform == "win32":
             import winsound
 
-            _map = {
-                "asterisk": winsound.MB_ICONASTERISK,
-                "exclamation": winsound.MB_ICONEXCLAMATION,
-                "hand": winsound.MB_ICONHAND,
-                "error": winsound.MB_ICONHAND,
-                "question": winsound.MB_ICONQUESTION,
-                "ok": winsound.MB_OK,
-                "default": winsound.MB_OK,
-            }
-            winsound.MessageBeep(_map.get(preset, winsound.MB_ICONASTERISK))
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
         else:
             print("\a", end="", flush=True)
     except Exception:

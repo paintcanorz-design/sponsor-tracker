@@ -20,6 +20,21 @@ class FanboxFetcher:
     def __init__(self, cookies: str):
         self.cookies = self._parse_cookies(cookies)
 
+    @staticmethod
+    def _merge_creator_slug_from_page(page, data: Optional[dict]) -> Optional[dict]:
+        if not data:
+            return data
+        try:
+            url = page.url or ""
+        except Exception:
+            url = ""
+        m = re.search(r"(?:fanbox\.cc|pixiv\.net)/@([^/?#]+)", url, re.I)
+        if not m:
+            return data
+        out = dict(data)
+        out["creator_name"] = m.group(1)
+        return out
+
     def _parse_cookies(self, cookie_str: str) -> dict:
         result = {}
         for part in (cookie_str or "").strip().split(";"):
@@ -117,7 +132,7 @@ class FanboxFetcher:
                 out = self._extract_amount_from_json(body)
                 if out is not None and (out.get("amount") or 0) >= 1000:
                     browser.close()
-                    return out
+                    return FanboxFetcher._merge_creator_slug_from_page(page, out)
 
             # 從頁面 HTML / 可見文字找（SPA 可能晚渲染）；不解析追隨數以加快更新
             amount, patron_count = None, None
@@ -161,13 +176,19 @@ class FanboxFetcher:
                     patron_count = max(patron_candidates)
                 if amount is not None and amount >= 1000:
                     browser.close()
-                    return {"amount": amount, "currency": "JPY", "patron_count": patron_count}
+                    return FanboxFetcher._merge_creator_slug_from_page(
+                        page,
+                        {"amount": amount, "currency": "JPY", "patron_count": patron_count},
+                    )
                 # 備援：僅數字+円
                 for m in re.finditer(r"(\d[\d,]+)\s*円", content):
                     val = float(m.group(1).replace(",", ""))
                     if 1000 <= val < 1e8:
                         browser.close()
-                        return {"amount": val, "currency": "JPY", "patron_count": patron_count}
+                        return FanboxFetcher._merge_creator_slug_from_page(
+                            page,
+                            {"amount": val, "currency": "JPY", "patron_count": patron_count},
+                        )
             except Exception:
                 pass
 
@@ -202,13 +223,19 @@ class FanboxFetcher:
                         patron_count = max(pc)
                     if amount is not None and amount >= 1000:
                         browser.close()
-                        return {"amount": amount, "currency": "JPY", "patron_count": patron_count}
+                        return FanboxFetcher._merge_creator_slug_from_page(
+                            page,
+                            {"amount": amount, "currency": "JPY", "patron_count": patron_count},
+                        )
                     if patron_count is not None:
                         for m in re.finditer(r"(\d[\d,]+)\s*円", content2):
                             val = float(m.group(1).replace(",", ""))
                             if 1000 <= val < 1e8:
                                 browser.close()
-                                return {"amount": val, "currency": "JPY", "patron_count": patron_count}
+                                return FanboxFetcher._merge_creator_slug_from_page(
+                                    page,
+                                    {"amount": val, "currency": "JPY", "patron_count": patron_count},
+                                )
                 except Exception:
                     pass
 
@@ -227,7 +254,10 @@ class FanboxFetcher:
                             val = float(nums[0].replace(",", ""))
                             if 1000 <= val < 1e8:
                                 browser.close()
-                                return {"amount": val, "currency": "JPY", "patron_count": None}
+                                return FanboxFetcher._merge_creator_slug_from_page(
+                                    page,
+                                    {"amount": val, "currency": "JPY", "patron_count": None},
+                                )
             except Exception:
                 pass
 

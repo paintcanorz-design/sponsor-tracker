@@ -92,11 +92,24 @@ class FantiaFetcher:
                     except ValueError:
                         pass
             if amount is not None or patron_count is not None:
-                return {
+                creator_name = None
+                for p in (
+                    r'<meta\s+property="og:title"\s+content="([^"]+)"',
+                    r"<title>([^<|]+)",
+                ):
+                    m = re.search(p, text, re.I)
+                    if m:
+                        creator_name = (m.group(1) or "").strip()
+                        if creator_name:
+                            break
+                out = {
                     "amount": amount if amount is not None else 0,
                     "patron_count": patron_count,
                     "currency": "JPY",
                 }
+                if creator_name:
+                    out["creator_name"] = creator_name
+                return out
         except Exception:
             pass
         return None

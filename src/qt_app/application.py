@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import math
+import re
 import subprocess
 import sys
 import threading
@@ -60,7 +61,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QStackedWidget,
     QSystemTrayIcon,
     QMenu,
@@ -119,14 +119,12 @@ from src.app_update import (
 )
 
 from src.i18n import (
-    INCREASE_SOUND_KEYS,
     LANG_EN,
     LANG_JA,
     LANG_ZH_TW,
     SCHEDULE_INTERVAL_MINUTES,
     effective_ui_language,
     get_language,
-    increase_sound_label,
     migrate_config_schedule_interval,
     normalize_schedule_interval_id,
     normalize_ui_language_raw,
@@ -152,13 +150,29 @@ from src.qt_app.shared import (
     parse_jst_hhmm,
     play_increase_sound,
     save_config,
-    normalize_increase_sound_key,
 )
 
 _PLATFORM_ORDER: tuple[str, ...] = ("patreon", "fanbox", "fantia")
 
 # Vertical gap after each settings / account section card (headline sits above the card).
 _SETTINGS_SECTION_VGAP = 24
+
+
+def _derive_platform_account_label(plat: str, cfg: dict, data: dict | None) -> str | None:
+    if plat == "patreon":
+        url = ((cfg.get("patreon") or {}).get("creator_page") or "").strip()
+        if "/c/" in url:
+            try:
+                slug = url.split("/c/", 1)[1].split("/")[0].split("?")[0].strip()
+                if slug and slug.lower() not in ("user", ""):
+                    return slug
+            except Exception:
+                pass
+        return None
+    if isinstance(data, dict):
+        v = (data.get("creator_name") or "").strip()
+        return v or None
+    return None
 
 
 def _app_icon_path() -> Path | None:
@@ -694,7 +708,7 @@ class CompactFloatWindow(QWidget):
         self._compact_move_shrink_timer.timeout.connect(self._shrink_compact_window)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setWindowTitle(tr("app.title_compact"))
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(296)
         self.setMaximumWidth(16777215)
         self.setMaximumHeight(16777215)
         self.setStyleSheet(_compact_window_stylesheet())
@@ -707,7 +721,7 @@ class CompactFloatWindow(QWidget):
 
         self.setObjectName("compactRoot")
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
+        root.setContentsMargins(2, 2, 2, 2)
         root.setSpacing(0)
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
@@ -737,8 +751,8 @@ class CompactFloatWindow(QWidget):
         panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         panel.customContextMenuRequested.connect(lambda p: self._show_compact_menu(panel, p))
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(14, 10, 14, 12)
-        pl.setSpacing(6)
+        pl.setContentsMargins(10, 8, 10, 10)
+        pl.setSpacing(5)
 
         row_total = QHBoxLayout()
         row_total.setSpacing(6)
@@ -794,11 +808,12 @@ class CompactFloatWindow(QWidget):
 
         self._plat_host = QWidget()
         self._plat_grid = QGridLayout(self._plat_host)
-        self._plat_grid.setContentsMargins(0, 4, 0, 0)
-        self._plat_grid.setHorizontalSpacing(14)
+        self._plat_grid.setContentsMargins(0, 2, 0, 0)
+        self._plat_grid.setHorizontalSpacing(8)
         pl.addWidget(self._plat_host)
 
-        self._plat_amount_min_w = QFontMetrics(_qf(15, True)).horizontalAdvance("\u00a5999,999") + 10
+        _fm = QFontMetrics(_qf(15, True))
+        self._plat_amount_min_w = _fm.horizontalAdvance("NT$9,999,999") + 6
 
         il.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
         ol.addWidget(inner, 0, Qt.AlignmentFlag.AlignTop)
@@ -1047,7 +1062,6 @@ class SponsorMainWindow(QMainWindow):
         self._daily_report_thread_started = False
         self._last_update_increase: float | None = None
         self._increase_indicator_until = None
-        self._sound_vol_timer: QTimer | None = None
         self._app_update_busy = False
         self._oneclick_busy = False
         self._oneclick_prog: QProgressDialog | None = None
@@ -1496,6 +1510,15 @@ class SponsorMainWindow(QMainWindow):
             st.setStyleSheet(
                 f"color: {PALETTE['success'] if logged else PALETTE['text_tertiary']};"
             )
+            if hasattr(self, f"{key}_account_lbl"):
+                ac = getattr(self, f"{key}_account_lbl")
+                name = (cfg.get("account_label") or "").strip()
+                if logged and name:
+                    ac.setText(name)
+                    ac.setVisible(True)
+                else:
+                    ac.setText("")
+                    ac.setVisible(False)
 
     def _on_ui_language_changed(self, _idx: int = 0) -> None:
         combo = getattr(self, "_ui_lang_combo", None)
@@ -1559,36 +1582,13 @@ class SponsorMainWindow(QMainWindow):
             return sid
         return normalize_schedule_interval_id(str(sid) if sid else "1h")
 
-    def _rebuild_sound_preset_combo(self, select_key: str | None = None) -> None:
-        if not hasattr(self, "_increase_sound_preset"):
-            return
-        if select_key is not None:
-            key0 = normalize_increase_sound_key(select_key)
-        else:
-            cur = self._increase_sound_preset.currentData()
-            if isinstance(cur, str) and cur in INCREASE_SOUND_KEYS:
-                key0 = cur
-            else:
-                key0 = normalize_increase_sound_key((load_config().get("gui") or {}).get("increase_sound"))
-        with QSignalBlocker(self._increase_sound_preset):
-            self._increase_sound_preset.clear()
-            for k in INCREASE_SOUND_KEYS:
-                self._increase_sound_preset.addItem(increase_sound_label(k), k)
-            for i in range(self._increase_sound_preset.count()):
-                if self._increase_sound_preset.itemData(i) == key0:
-                    self._increase_sound_preset.setCurrentIndex(i)
-                    break
-
     def _refresh_schedule_button_and_status(self) -> None:
         if not hasattr(self, "_sched_btn"):
             return
         if self._schedule_running:
             self._sched_btn.setText(tr("settings.sched.stop"))
-            self._sched_btn.setObjectName("danger")
-            self._sched_btn.setStyleSheet(
-                f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
-                f"border-radius: 8px; font-weight: 600;"
-            )
+            self._sched_btn.setObjectName("primary")
+            self._sched_btn.setStyleSheet("")
             sid = self._sched_interval_sid()
             self.update_status.setText(
                 tr("settings.sched.running", interval=schedule_interval_label(sid))
@@ -1603,6 +1603,8 @@ class SponsorMainWindow(QMainWindow):
             )
             self.update_status.setText(tr("settings.sched.stopped"))
             self.update_status.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
+        self._sched_btn.style().unpolish(self._sched_btn)
+        self._sched_btn.style().polish(self._sched_btn)
         self._refresh_sched_summary_line()
 
     def _apply_full_retranslate(self) -> None:
@@ -1668,18 +1670,11 @@ class SponsorMainWindow(QMainWindow):
             self._plat_hint_label.setText(tr("settings.platform.hint"))
         if hasattr(self, "_lbl_sched_interval"):
             self._lbl_sched_interval.setText(tr("settings.sched.interval"))
-        if hasattr(self, "_lbl_sound_system"):
-            self._lbl_sound_system.setText(tr("settings.sound.system"))
-        if hasattr(self, "_lbl_sound_volume"):
-            self._lbl_sound_volume.setText(tr("settings.sound.volume"))
-        if hasattr(self, "_lbl_sound_wav"):
-            self._lbl_sound_wav.setText(tr("settings.sound.wav"))
         if hasattr(self, "_lbl_discord_time"):
             self._lbl_discord_time.setText(tr("settings.discord.time"))
         if hasattr(self, "_lbl_playwright_miss"):
             self._lbl_playwright_miss.setText(tr("settings.playwright.missing"))
         self._rebuild_sched_interval_combo()
-        self._rebuild_sound_preset_combo()
         if hasattr(self, "_ui_lang_combo"):
             pairs = (
                 ("auto", "lang.auto"),
@@ -1734,8 +1729,6 @@ class SponsorMainWindow(QMainWindow):
                 getattr(self, f"{key}_done_btn").setText(tr("settings.done"))
             if hasattr(self, f"{key}_logout_btn"):
                 getattr(self, f"{key}_logout_btn").setText(tr("settings.logout"))
-        if hasattr(self, "_btn_sound_test"):
-            self._btn_sound_test.setText(tr("settings.sound.test"))
         if hasattr(self, "_btn_discord_test"):
             self._btn_discord_test.setText(tr("settings.discord.test"))
         if hasattr(self, "_btn_discord_report_test"):
@@ -2445,6 +2438,7 @@ class SponsorMainWindow(QMainWindow):
                         return ("fantia", None, str(ex))
 
                 _stagger_s = 0.4
+                _label_dirty = False
                 for i, fn in enumerate((fetch_patreon, fetch_fanbox, fetch_fantia)):
                     if i:
                         time.sleep(_stagger_s)
@@ -2461,8 +2455,16 @@ class SponsorMainWindow(QMainWindow):
                                     data.get("currency", "USD" if plat == "patreon" else "JPY"),
                                     data.get("patron_count"),
                                 )
+                                _lbl = _derive_platform_account_label(plat, cfg, data)
+                                if _lbl:
+                                    _prev = (cfg.get(plat) or {}).get("account_label")
+                                    if _prev != _lbl:
+                                        cfg.setdefault(plat, {})["account_label"] = _lbl
+                                        _label_dirty = True
                     except Exception:
                         pass
+                if _label_dirty:
+                    save_config(cfg)
 
                 today = today_jst_str()
                 for plat, data in results.items():
@@ -2537,6 +2539,7 @@ class SponsorMainWindow(QMainWindow):
             self._last_update_increase = None
         self.config = load_config()
         self._refresh_header_fx_labels()
+        self._refresh_platform_login_labels()
         if s is not None:
             self._apply_dashboard_ui_immediate(s)
         else:
@@ -2969,107 +2972,9 @@ class SponsorMainWindow(QMainWindow):
         left.addWidget(cur_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        self._add_settings_group(left, "settings.group.tray")
-        tray_card = _make_settings_group_card(card_parent)
-        tl = QVBoxLayout(tray_card)
-        tl.setContentsMargins(14, 12, 14, 12)
-        tl.setSpacing(8)
-        self._sw_close_tray = QCheckBox(tr("settings.tray.close"))
-        self._sw_close_tray.setChecked(self._close_to_tray)
-        self._sw_close_tray.toggled.connect(self._on_switch_close_to_tray)
-        self._sw_min_tray = QCheckBox(tr("settings.tray.min"))
-        self._sw_min_tray.setChecked(self._minimize_to_tray)
-        self._sw_min_tray.toggled.connect(self._on_switch_minimize_to_tray)
-        self._sw_start_tray = QCheckBox(tr("settings.tray.start"))
-        self._sw_start_tray.setChecked(self._start_minimized_to_tray)
-        self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
-        self._sw_autostart = QCheckBox(tr("settings.tray.autostart"))
-        with QSignalBlocker(self._sw_autostart):
-            self._sw_autostart.setChecked(self._start_with_windows)
-        if sys.platform != "win32":
-            self._sw_autostart.setEnabled(False)
-            self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
-        self._sw_autostart.toggled.connect(self._on_switch_autostart)
-        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
-            tl.addWidget(w)
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            self._sw_close_tray.setEnabled(False)
-            self._sw_min_tray.setEnabled(False)
-            self._sw_start_tray.setEnabled(False)
-        left.addWidget(tray_card)
-        left.addSpacing(_SETTINGS_SECTION_VGAP)
+        left.addStretch(1)
 
-        self._add_settings_group(left, "settings.group.version", "settings.version.blurb")
-        ver_card = _make_settings_group_card(card_parent)
-        vl = QVBoxLayout(ver_card)
-        vl.setContentsMargins(14, 12, 14, 12)
-        vl.setSpacing(10)
-        self._app_version_label = QLabel(tr("settings.version.current", v=current_app_version()))
-        self._app_version_label.setObjectName("settingsFormLabel")
-        vl.addWidget(self._app_version_label)
-        ver_btn_row = QHBoxLayout()
-        ver_btn_row.setSpacing(8)
-        self._app_update_btn = QPushButton(tr("settings.update.check"))
-        self._app_update_btn.setMinimumHeight(36)
-        self._app_update_btn.clicked.connect(self._on_app_update_clicked)
-        ver_btn_row.addWidget(self._app_update_btn, 1)
-        self._app_oneclick_btn = QPushButton(tr("settings.update.oneclick"))
-        self._app_oneclick_btn.setMinimumHeight(36)
-        self._app_oneclick_btn.clicked.connect(self._on_oneclick_update_clicked)
-        if not lazy_update_supported():
-            self._app_oneclick_btn.setEnabled(False)
-            self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
-        ver_btn_row.addWidget(self._app_oneclick_btn, 1)
-        vl.addLayout(ver_btn_row)
-        self._btn_github_repo = QPushButton(tr("settings.version.github"))
-        self._btn_github_repo.setMinimumHeight(36)
-        self._btn_github_repo.clicked.connect(self._on_open_github_repo_clicked)
-        _repo0 = (configured_github_repo() or "").strip()
-        if not _repo0 or _repo0.count("/") != 1:
-            self._btn_github_repo.setEnabled(False)
-            self._btn_github_repo.setToolTip(tr("settings.version.github_tip"))
-        vl.addWidget(self._btn_github_repo)
-        left.addWidget(ver_card)
-        left.addSpacing(_SETTINGS_SECTION_VGAP)
-
-        self._add_settings_group(right, "settings.group.sound")
-        sound_card = _make_settings_group_card(card_parent)
-        sil = QVBoxLayout(sound_card)
-        sil.setContentsMargins(14, 12, 14, 12)
-        sil.setSpacing(10)
-        r1 = QHBoxLayout()
-        self._lbl_sound_system = _settings_form_label(tr("settings.sound.system"))
-        r1.addWidget(self._lbl_sound_system, 0)
-        self._increase_sound_preset = QComboBox()
-        self._increase_sound_preset.currentIndexChanged.connect(self._on_increase_sound_preset_changed)
-        self._rebuild_sound_preset_combo(gui_sound.get("increase_sound"))
-        r1.addWidget(self._increase_sound_preset, 1)
-        self._btn_sound_test = QPushButton(tr("settings.sound.test"))
-        self._btn_sound_test.clicked.connect(self._test_increase_sound)
-        r1.addWidget(self._btn_sound_test)
-        sil.addLayout(r1)
-        vr = QHBoxLayout()
-        self._lbl_sound_volume = _settings_form_label(tr("settings.sound.volume"))
-        vr.addWidget(self._lbl_sound_volume, 0)
-        self._sound_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._sound_volume_slider.setRange(0, 100)
-        _v0 = int(float(gui_sound.get("increase_sound_volume", 100)))
-        self._sound_volume_slider.setValue(_v0)
-        self._sound_volume_slider.valueChanged.connect(self._on_sound_volume_slider)
-        vr.addWidget(self._sound_volume_slider, 1)
-        self._sound_volume_lbl = QLabel(f"{_v0}%")
-        vr.addWidget(self._sound_volume_lbl)
-        sil.addLayout(vr)
-        self._lbl_sound_wav = _settings_form_label(tr("settings.sound.wav"))
-        sil.addWidget(self._lbl_sound_wav)
-        self._increase_sound_wav_entry = QLineEdit()
-        self._increase_sound_wav_entry.setText(gui_sound.get("increase_sound_wav") or "")
-        self._increase_sound_wav_entry.editingFinished.connect(self._on_increase_sound_wav_done)
-        sil.addWidget(self._increase_sound_wav_entry)
-        right.addWidget(sound_card)
-        right.addSpacing(_SETTINGS_SECTION_VGAP)
-
-        self._add_settings_group(right, "settings.group.discord")
+        self._add_settings_group(left, "settings.group.discord")
         dc = _make_settings_group_card(card_parent)
         dcl = QVBoxLayout(dc)
         dcl.setContentsMargins(14, 12, 14, 12)
@@ -3105,10 +3010,72 @@ class SponsorMainWindow(QMainWindow):
         self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
         dtr.addWidget(self._btn_discord_report_test)
         dcl.addLayout(dtr)
-        right.addWidget(dc)
+        left.addWidget(dc)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(right, "settings.group.tray")
+        tray_card = _make_settings_group_card(card_parent)
+        tl = QVBoxLayout(tray_card)
+        tl.setContentsMargins(14, 12, 14, 12)
+        tl.setSpacing(8)
+        self._sw_close_tray = QCheckBox(tr("settings.tray.close"))
+        self._sw_close_tray.setChecked(self._close_to_tray)
+        self._sw_close_tray.toggled.connect(self._on_switch_close_to_tray)
+        self._sw_min_tray = QCheckBox(tr("settings.tray.min"))
+        self._sw_min_tray.setChecked(self._minimize_to_tray)
+        self._sw_min_tray.toggled.connect(self._on_switch_minimize_to_tray)
+        self._sw_start_tray = QCheckBox(tr("settings.tray.start"))
+        self._sw_start_tray.setChecked(self._start_minimized_to_tray)
+        self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
+        self._sw_autostart = QCheckBox(tr("settings.tray.autostart"))
+        with QSignalBlocker(self._sw_autostart):
+            self._sw_autostart.setChecked(self._start_with_windows)
+        if sys.platform != "win32":
+            self._sw_autostart.setEnabled(False)
+            self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
+        self._sw_autostart.toggled.connect(self._on_switch_autostart)
+        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
+            tl.addWidget(w)
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._sw_close_tray.setEnabled(False)
+            self._sw_min_tray.setEnabled(False)
+            self._sw_start_tray.setEnabled(False)
+        right.addWidget(tray_card)
         right.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        left.addStretch(1)
+        self._add_settings_group(right, "settings.group.version", "settings.version.blurb")
+        ver_card = _make_settings_group_card(card_parent)
+        vl = QVBoxLayout(ver_card)
+        vl.setContentsMargins(14, 12, 14, 12)
+        vl.setSpacing(10)
+        self._app_version_label = QLabel(tr("settings.version.current", v=current_app_version()))
+        self._app_version_label.setObjectName("settingsFormLabel")
+        vl.addWidget(self._app_version_label)
+        ver_btn_row = QHBoxLayout()
+        ver_btn_row.setSpacing(8)
+        self._app_update_btn = QPushButton(tr("settings.update.check"))
+        self._app_update_btn.setMinimumHeight(36)
+        self._app_update_btn.clicked.connect(self._on_app_update_clicked)
+        ver_btn_row.addWidget(self._app_update_btn, 1)
+        self._app_oneclick_btn = QPushButton(tr("settings.update.oneclick"))
+        self._app_oneclick_btn.setMinimumHeight(36)
+        self._app_oneclick_btn.clicked.connect(self._on_oneclick_update_clicked)
+        if not lazy_update_supported():
+            self._app_oneclick_btn.setEnabled(False)
+            self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
+        ver_btn_row.addWidget(self._app_oneclick_btn, 1)
+        vl.addLayout(ver_btn_row)
+        self._btn_github_repo = QPushButton(tr("settings.version.github"))
+        self._btn_github_repo.setMinimumHeight(36)
+        self._btn_github_repo.clicked.connect(self._on_open_github_repo_clicked)
+        _repo0 = (configured_github_repo() or "").strip()
+        if not _repo0 or _repo0.count("/") != 1:
+            self._btn_github_repo.setEnabled(False)
+            self._btn_github_repo.setToolTip(tr("settings.version.github_tip"))
+        vl.addWidget(self._btn_github_repo)
+        right.addWidget(ver_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
+
         right.addStretch(1)
 
 
@@ -3183,10 +3150,7 @@ class SponsorMainWindow(QMainWindow):
         pr.setContentsMargins(14, 12, 14, 12)
         pr.setSpacing(10)
         self._purge_btn = QPushButton(tr("settings.purge.btn"))
-        self._purge_btn.setStyleSheet(
-            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
-            f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
-        )
+        self._purge_btn.setMinimumHeight(38)
         self._purge_btn.clicked.connect(self._master_clear_login_and_history)
         pr.addWidget(self._purge_btn)
         left.addWidget(purge_card)
@@ -3254,6 +3218,16 @@ class SponsorMainWindow(QMainWindow):
             top.addWidget(st)
             setattr(self, f"{key}_status", st)
             rl.addLayout(top)
+            ac_name = QLabel("")
+            ac_name.setObjectName("settingsFormLabel")
+            ac_name.setWordWrap(True)
+            ac_name.setStyleSheet(f"color: {PALETTE['text_secondary']}; font-size: 12px;")
+            _al = (cfg.get("account_label") or "").strip()
+            if logged and _al:
+                ac_name.setText(_al)
+            ac_name.setVisible(bool(logged and _al))
+            setattr(self, f"{key}_account_lbl", ac_name)
+            rl.addWidget(ac_name)
             if (desc or "").strip():
                 desc_l = QLabel(desc)
                 desc_l.setObjectName("settingsFormLabel")
@@ -3335,46 +3309,6 @@ class SponsorMainWindow(QMainWindow):
             else:
                 body = msg
             QMessageBox.warning(self, tr("autostart.fail.title"), body)
-
-    def _on_sound_volume_slider(self, v):
-        self._sound_volume_lbl.setText(f"{int(v)}%")
-        if self._sound_vol_timer is None:
-            self._sound_vol_timer = QTimer(self)
-            self._sound_vol_timer.setSingleShot(True)
-            self._sound_vol_timer.timeout.connect(self._persist_sound_volume_from_slider)
-        self._sound_vol_timer.stop()
-        self._sound_vol_timer.start(400)
-
-    def _persist_sound_volume_from_slider(self):
-        val = max(0, min(100, int(self._sound_volume_slider.value())))
-        self.config = load_config()
-        self.config.setdefault("gui", {})["increase_sound_volume"] = val
-        save_config(self.config)
-
-    def _on_increase_sound_preset_changed(self, _idx: int = 0) -> None:
-        key = self._increase_sound_preset.currentData()
-        if not isinstance(key, str):
-            return
-        self.config = load_config()
-        self.config.setdefault("gui", {})["increase_sound"] = key
-        save_config(self.config)
-
-    def _on_increase_sound_wav_done(self):
-        self.config = load_config()
-        self.config.setdefault("gui", {})["increase_sound_wav"] = self._increase_sound_wav_entry.text().strip()
-        save_config(self.config)
-
-    def _test_increase_sound(self):
-        snap = load_config()
-        gui = snap.setdefault("gui", {})
-        key = self._increase_sound_preset.currentData() or "asterisk"
-        gui["increase_sound"] = key
-        if key == "alert_bundle":
-            gui["increase_sound_wav"] = ""
-        else:
-            gui["increase_sound_wav"] = self._increase_sound_wav_entry.text().strip()
-        gui["increase_sound_volume"] = int(self._sound_volume_slider.value())
-        play_increase_sound(snap)
 
     def _on_discord_webhook_done(self):
         self.config = load_config()
@@ -3523,6 +3457,7 @@ class SponsorMainWindow(QMainWindow):
             self.config.setdefault("fantia", {})["session_id"] = ""
         else:
             self.config.setdefault(key, {})["cookies"] = ""
+        self.config.setdefault(key, {}).pop("account_label", None)
         if persist:
             save_config(self.config)
         st = getattr(self, f"{key}_status")
@@ -3531,6 +3466,9 @@ class SponsorMainWindow(QMainWindow):
         st.setToolTip("")
         getattr(self, f"{key}_btn").setEnabled(True)
         getattr(self, f"{key}_done_btn").setEnabled(False)
+        if hasattr(self, f"{key}_account_lbl"):
+            getattr(self, f"{key}_account_lbl").setText("")
+            getattr(self, f"{key}_account_lbl").setVisible(False)
 
     def _platform_login_logout(self, key: str) -> None:
         self._clear_platform_login_state(key)
@@ -3596,6 +3534,9 @@ class SponsorMainWindow(QMainWindow):
         self._login_flow_active["patreon"] = False
         if s:
             self.config.setdefault("patreon", {})["cookies"] = s
+            _pl = _derive_platform_account_label("patreon", self.config, None)
+            if _pl:
+                self.config.setdefault("patreon", {})["account_label"] = _pl
             save_config(self.config)
             self.patreon_status.setText(tr("settings.account.in"))
             self.patreon_status.setStyleSheet(f"color: {PALETTE['success']};")
@@ -3605,6 +3546,7 @@ class SponsorMainWindow(QMainWindow):
             self.patreon_status.setStyleSheet(f"color: {PALETTE['error']};")
             self.patreon_status.setToolTip(tr("login.tip.patreon"))
         self.patreon_btn.setEnabled(True)
+        self._refresh_platform_login_labels()
 
     def _fanbox_login_start(self):
         if ce := self.browser_cancel_events.get("fanbox"):
@@ -3645,6 +3587,7 @@ class SponsorMainWindow(QMainWindow):
             self.fanbox_status.setStyleSheet(f"color: {PALETTE['error']};")
             self.fanbox_status.setToolTip(tr("login.tip.fanbox"))
         self.fanbox_btn.setEnabled(True)
+        self._refresh_platform_login_labels()
 
     def _fantia_login_start(self):
         if ce := self.browser_cancel_events.get("fantia"):
@@ -3685,6 +3628,7 @@ class SponsorMainWindow(QMainWindow):
             self.fantia_status.setStyleSheet(f"color: {PALETTE['error']};")
             self.fantia_status.setToolTip(tr("login.tip.fantia"))
         self.fantia_btn.setEnabled(True)
+        self._refresh_platform_login_labels()
 
 def main():
     detach_windows_console_if_present()
