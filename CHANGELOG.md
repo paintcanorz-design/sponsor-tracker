@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.12
+
+- Mini dashboard UI refresh: right-aligned people count, compact top-right controls (pin + open main), and subtle inset frame style for clearer window separation.
+- Mini dashboard behavior tuning: improved per-screen DPI resize stability when moving across monitors with different scaling.
+
 ## 1.1.1
 
 - Windows portable **exe / onedir name** restored to **贊助額追蹤** (matches existing launcher batch files and one-click update expectations).
