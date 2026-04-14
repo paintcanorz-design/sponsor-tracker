@@ -693,7 +693,7 @@ class CompactFloatWindow(QWidget):
         self._compact_move_shrink_timer.timeout.connect(self._shrink_compact_window)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setWindowTitle(tr("app.title_compact"))
-        self.setMinimumWidth(200)
+        self.setMinimumWidth(148)
         self.setMaximumWidth(16777215)
         self.setMaximumHeight(16777215)
         self.setStyleSheet(_compact_window_stylesheet())
@@ -736,16 +736,20 @@ class CompactFloatWindow(QWidget):
         panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         panel.customContextMenuRequested.connect(lambda p: self._show_compact_menu(panel, p))
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(6, 6, 6, 6)
-        pl.setSpacing(4)
+        pl.setContentsMargins(3, 4, 3, 4)
+        pl.setSpacing(2)
 
         row_total = QHBoxLayout()
-        row_total.setSpacing(6)
+        row_total.setSpacing(3)
         self._total_lbl = QLabel("\u00a50")
         self._total_lbl.setFont(_qf(16, True))
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
         row_total.addWidget(self._total_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        row_total.addStretch(1)
+        self._total_today_lbl = QLabel("")
+        self._total_today_lbl.setFont(_qf(9, True))
+        self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
+        self._total_today_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        row_total.addWidget(self._total_today_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._inc_arrow_lbl = QLabel("")
         self._inc_arrow_lbl.setFont(_qf(11, True))
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
@@ -780,11 +784,38 @@ class CompactFloatWindow(QWidget):
         self._plat_box.setAlignment(Qt.AlignmentFlag.AlignTop)
         pl.addWidget(self._plat_host)
 
-        _fm_plat = QFontMetrics(_qf(13, True))
-        _sample_amt = format_money_jpy_as_display(9_999_999.0, app.config)
-        self._plat_line_min_w = max(
-            _fm_plat.horizontalAdvance(f"\u25cf {n}  {_sample_amt}") for n in self._PLAT_NAMES.values()
-        ) + 8
+        _fm_amt = QFontMetrics(_qf(13, True))
+        _fm_td_small = QFontMetrics(_qf(9, True))
+        _sample_amt7 = format_money_jpy_as_display(9_999_999.0, app.config)
+        _sample_td5 = format_money_jpy_as_display(99_999.0, app.config, signed=True)
+        _sample_td5n = format_money_jpy_as_display(-99_999.0, app.config, signed=True)
+        _td_col_w = (
+            max(
+                _fm_td_small.horizontalAdvance(_sample_td5),
+                _fm_td_small.horizontalAdvance(_sample_td5n),
+            )
+            + 2
+        )
+        self._plat_line_base_w = (
+            max(
+                _fm_amt.horizontalAdvance(f"\u25cf {n}  {_sample_amt7}")
+                for n in self._PLAT_NAMES.values()
+            )
+            + 2
+        )
+        self._plat_td_suffix_w = 6 + _td_col_w
+        _fm16 = QFontMetrics(_qf(16, True))
+        self._compact_w_tot = _fm16.horizontalAdvance(_sample_amt7) + 2
+        self._compact_w_tsum = (
+            max(
+                _fm_td_small.horizontalAdvance(_sample_td5),
+                _fm_td_small.horizontalAdvance(_sample_td5n),
+            )
+            + 2
+        )
+        self._total_lbl.setFixedWidth(self._compact_w_tot)
+        self._total_today_lbl.setFixedWidth(0)
+        self._total_today_lbl.hide()
 
         il.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
         ol.addWidget(inner, 0, Qt.AlignmentFlag.AlignTop)
@@ -888,6 +919,7 @@ class CompactFloatWindow(QWidget):
 
     def refresh(self, stats: dict | None = None):
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
+        self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._increase_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         if stats is None:
@@ -901,9 +933,20 @@ class CompactFloatWindow(QWidget):
         total = float(s.get("total_amount") or 0)
         cfg = self._app.config
         self._total_lbl.setText(format_money_jpy_as_display(total, cfg))
+        today_sum = float(s.get("today_positive_increase_jpy") or 0)
+        if today_sum > 0:
+            self._total_today_lbl.setFixedWidth(self._compact_w_tsum)
+            self._total_today_lbl.setText(format_money_jpy_as_display(today_sum, cfg, signed=True))
+            self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
+            self._total_today_lbl.show()
+        else:
+            self._total_today_lbl.clear()
+            self._total_today_lbl.setFixedWidth(0)
+            self._total_today_lbl.hide()
         fx = fx_dict_from_config(cfg)
         uj = float(fx.get("usd_jpy") or 150)
         platforms = s.get("by_platform") or []
+        today_by_plat: dict[str, float] = dict(s.get("today_increase_by_platform_jpy") or {})
         tc = PALETTE["text"]
         self._clear_plat_box()
         for p in platforms:
@@ -919,19 +962,38 @@ class CompactFloatWindow(QWidget):
             name = self._PLAT_NAMES.get(plat, plat)
             name_esc = html.escape(name)
             amt_s = html.escape(format_money_jpy_as_display(amt_jpy, cfg))
-            line = (
-                f"<span style='color:{color}; font-weight:600; font-size:10px; "
-                f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
-                f"&nbsp;&nbsp;"
-                f"<span style='color:{tc}; font-weight:700; font-size:13px; "
-                f"letter-spacing:-0.3px'>{amt_s}</span>"
-            )
+            td = float(today_by_plat.get(plat) or 0.0)
+            if td != 0:
+                tcol = PALETTE["success"] if td > 0 else PALETTE["error"]
+                today_esc = html.escape(format_money_jpy_as_display(td, cfg, signed=True))
+                today_part = (
+                    f"&nbsp;&nbsp;<span style='color:{tcol}; font-weight:600; font-size:9px; "
+                    f"letter-spacing:-0.25px'>{today_esc}</span>"
+                )
+                line = (
+                    f"<span style='color:{color}; font-weight:600; font-size:10px; "
+                    f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
+                    f"&nbsp;&nbsp;"
+                    f"<span style='color:{tc}; font-weight:700; font-size:13px; "
+                    f"letter-spacing:-0.3px'>{amt_s}</span>"
+                    f"{today_part}"
+                )
+                plat_w = self._plat_line_base_w + self._plat_td_suffix_w
+            else:
+                line = (
+                    f"<span style='color:{color}; font-weight:600; font-size:10px; "
+                    f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
+                    f"&nbsp;&nbsp;"
+                    f"<span style='color:{tc}; font-weight:700; font-size:13px; "
+                    f"letter-spacing:-0.3px'>{amt_s}</span>"
+                )
+                plat_w = self._plat_line_base_w
             lbl = QLabel()
             lbl.setTextFormat(Qt.TextFormat.RichText)
             lbl.setWordWrap(False)
-            lbl.setMinimumHeight(22)
-            lbl.setMinimumWidth(self._plat_line_min_w)
-            lbl.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+            lbl.setMinimumHeight(20)
+            lbl.setFixedWidth(plat_w)
+            lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             lbl.setText(line)
             self._plat_box.addWidget(lbl, 0, Qt.AlignmentFlag.AlignLeft)
@@ -1735,10 +1797,22 @@ class SponsorMainWindow(QMainWindow):
                     amt *= rate
                 total_amt += amt
                 total_pat += int(p.get("patron_count") or 0)
+        tmap: dict[str, float] = dict(s.get("today_increase_by_platform_jpy") or {})
+        filtered_today: dict[str, float] = {}
+        today_pos_sum = 0.0
+        for key in _PLATFORM_ORDER:
+            if not vis.get(key, True):
+                continue
+            v = float(tmap.get(key) or 0.0)
+            filtered_today[key] = v
+            if v > 0:
+                today_pos_sum += v
         out = dict(s)
         out["by_platform"] = filtered
         out["total_amount"] = total_amt
         out["total_patron_count"] = total_pat
+        out["today_increase_by_platform_jpy"] = filtered_today
+        out["today_positive_increase_jpy"] = today_pos_sum
         return out
 
     def _on_platform_visibility_toggled(self, key: str, on: bool) -> None:
@@ -1777,22 +1851,11 @@ class SponsorMainWindow(QMainWindow):
             s_lbl.setFont(_qf(12))
             s_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
             s_lbl.setWordWrap(True)
-            val_row = QHBoxLayout()
-            val_row.setContentsMargins(0, 0, 0, 0)
-            val_row.setSpacing(8)
-            val_row.addWidget(v_lbl, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            val_row.addStretch(1)
-            rise_lbl = QLabel("")
-            r_sz = 12 if col == 0 else 11
-            rise_lbl.setFont(_qf(r_sz, True))
-            rise_lbl.setWordWrap(False)
-            rise_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            val_row.addWidget(rise_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
             lay.addWidget(t_lbl)
-            lay.addLayout(val_row)
+            lay.addWidget(v_lbl)
             lay.addWidget(s_lbl)
             self._dash_hero_grid.addWidget(card, 0, col)
-            self._hero_cells.append({"title": t_lbl, "value": v_lbl, "sub": s_lbl, "today_rise": rise_lbl})
+            self._hero_cells.append({"title": t_lbl, "value": v_lbl, "sub": s_lbl})
 
         self._plat_empty = _make_card(self._dash_platforms, "platTile")
         pel = QVBoxLayout(self._plat_empty)
@@ -2194,21 +2257,6 @@ class SponsorMainWindow(QMainWindow):
             h3["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
             h3["sub"].setText("")
         h3["sub"].setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
-
-        today_up = float(s.get("today_positive_increase_jpy") or 0)
-        rise_disp = (
-            format_money_jpy_as_display(today_up, self.config, signed=True)
-            if today_up > 0
-            else "\u2014"
-        )
-        rise_style = (
-            f"color: {PALETTE['success']} !important; letter-spacing: -0.35px;"
-            if today_up > 0
-            else f"color: {PALETTE['text_tertiary']} !important;"
-        )
-        for hi in self._hero_cells:
-            hi["today_rise"].setText(rise_disp)
-            hi["today_rise"].setStyleSheet(rise_style)
 
         platforms = s.get("by_platform") or []
         nplat = len(platforms)

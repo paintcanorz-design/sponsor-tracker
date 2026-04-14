@@ -407,14 +407,18 @@ def get_dashboard_stats():
             "SELECT platform, change_amount FROM daily_summary WHERE date = ?",
             (today_d,),
         ).fetchall()
+        today_increase_by_platform_jpy: dict[str, float] = {}
         today_positive_increase_jpy = 0.0
         for r in today_rows:
             ch = r["change_amount"]
-            if ch is None or float(ch) <= 0:
+            if ch is None:
                 continue
             plat = r["platform"]
             mult = rate if currency_map.get(plat) == "USD" else 1.0
-            today_positive_increase_jpy += float(ch) * mult
+            jpy_delta = float(ch) * mult
+            today_increase_by_platform_jpy[plat] = jpy_delta
+            if jpy_delta > 0:
+                today_positive_increase_jpy += jpy_delta
         change_vs_yesterday = (total_amount - yesterday_amount) if has_yesterday else None
         change_pct = (
             (total_amount - yesterday_amount) / yesterday_amount * 100
@@ -442,6 +446,7 @@ def get_dashboard_stats():
             "increase_amount": increase_amount,
             "decrease_amount": decrease_amount,
             "today_positive_increase_jpy": today_positive_increase_jpy,
+            "today_increase_by_platform_jpy": today_increase_by_platform_jpy,
             "patron_change": patron_change,
             "yesterday_amount": yesterday_amount,
             "by_platform": by_platform,
