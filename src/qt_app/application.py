@@ -151,6 +151,11 @@ from src.qt_app.shared import (
 
 _PLATFORM_ORDER: tuple[str, ...] = ("patreon", "fanbox", "fantia")
 
+# Hidden test mode (5 quick taps on header app title): fake dashboard / mini numbers.
+_DASH_TEST_PLATFORM_AMT = 123456.0
+_DASH_TEST_PLATFORM_PATRONS = 999
+_DASH_TEST_TODAY_INCR = 9999.0
+
 # Vertical gap after each settings / account section card (headline sits above the card).
 _SETTINGS_SECTION_VGAP = 24
 
@@ -204,34 +209,34 @@ def _qf(size: int, bold: bool = False, weight: QFont.Weight | None = None) -> QF
 
 _COMPACT_FONT_PROFILES: dict[str, dict[str, int]] = {
     "small": {
-        "total": 16,
+        "total": 15,
         "today": 9,
         "arrow": 11,
         "inc_line": 10,
         "plat_name": 10,
         "plat_amt": 13,
         "plat_td": 9,
-        "plat_row_h": 20,
+        "plat_row_h": 18,
     },
     "medium": {
-        "total": 18,
+        "total": 17,
         "today": 10,
         "arrow": 12,
         "inc_line": 11,
         "plat_name": 11,
         "plat_amt": 14,
         "plat_td": 10,
-        "plat_row_h": 22,
+        "plat_row_h": 20,
     },
     "large": {
-        "total": 20,
+        "total": 19,
         "today": 11,
         "arrow": 13,
         "inc_line": 12,
         "plat_name": 12,
         "plat_amt": 15,
         "plat_td": 11,
-        "plat_row_h": 24,
+        "plat_row_h": 22,
     },
 }
 
@@ -660,6 +665,10 @@ def _compact_window_stylesheet() -> str:
         background-color: transparent;
         border: none;
     }}
+    QWidget#compactPanel QLabel {{
+        margin: 0px;
+        padding: 0px;
+    }}
     QLabel {{
         color: {c["text"]} !important;
         background: transparent;
@@ -693,10 +702,10 @@ def _compact_window_stylesheet() -> str:
     QToolButton#compactChromeBtn {{
         background: transparent;
         border: none;
-        border-radius: 6px;
-        padding: 1px;
-        min-width: 22px;
-        min-height: 22px;
+        border-radius: 5px;
+        padding: 0px;
+        min-width: 18px;
+        min-height: 18px;
     }}
     QToolButton#compactChromeBtn:hover {{
         background-color: {c["segment_hover"]};
@@ -776,7 +785,7 @@ class CompactFloatWindow(QWidget):
 
         self.setObjectName("compactRoot")
         root = QVBoxLayout(self)
-        root.setContentsMargins(2, 2, 2, 2)
+        root.setContentsMargins(1, 1, 1, 1)
         root.setSpacing(0)
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
@@ -789,7 +798,7 @@ class CompactFloatWindow(QWidget):
         _sh.setOffset(0, 3)
         outer.setGraphicsEffect(_sh)
         ol = QVBoxLayout(outer)
-        ol.setContentsMargins(2, 2, 2, 2)
+        ol.setContentsMargins(1, 1, 1, 1)
         ol.setSpacing(0)
 
         inner = QFrame()
@@ -806,11 +815,12 @@ class CompactFloatWindow(QWidget):
         panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         panel.customContextMenuRequested.connect(lambda p: self._show_compact_menu(panel, p))
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(3, 4, 3, 4)
-        pl.setSpacing(2)
+        pl.setContentsMargins(3, 3, 3, 3)
+        pl.setSpacing(0)
 
         row_total = QHBoxLayout()
-        row_total.setSpacing(3)
+        row_total.setContentsMargins(0, 0, 0, 0)
+        row_total.setSpacing(2)
         self._total_lbl = QLabel("\u00a50")
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
         self._total_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -829,9 +839,9 @@ class CompactFloatWindow(QWidget):
         self._btn_compact_open_main.setObjectName("compactChromeBtn")
         _arrow_col = PALETTE["text_tertiary"]
         self._btn_compact_open_main.setIcon(
-            compact_open_main_icon(size=12, color=_arrow_col)
+            compact_open_main_icon(size=9, color=_arrow_col)
         )
-        self._btn_compact_open_main.setIconSize(QSize(12, 12))
+        self._btn_compact_open_main.setIconSize(QSize(9, 9))
         self._btn_compact_open_main.setToolTip(tr("compact.open_main"))
         self._btn_compact_open_main.setAutoRaise(True)
         self._btn_compact_open_main.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -857,8 +867,8 @@ class CompactFloatWindow(QWidget):
         self._plat_host = QWidget()
         self._plat_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self._plat_box = QVBoxLayout(self._plat_host)
-        self._plat_box.setContentsMargins(0, 2, 0, 0)
-        self._plat_box.setSpacing(3)
+        self._plat_box.setContentsMargins(0, 0, 0, 0)
+        self._plat_box.setSpacing(2)
         self._plat_box.setAlignment(Qt.AlignmentFlag.AlignTop)
         pl.addWidget(self._plat_host)
 
@@ -1130,6 +1140,9 @@ class SponsorMainWindow(QMainWindow):
         self._nav_group: QButtonGroup | None = None
         self._nav_btns: list[QPushButton] = []
         self._compact_win: CompactFloatWindow | None = None
+        self._dashboard_test_mode = False
+        self._title_secret_tap_count = 0
+        self._title_secret_tap_last = 0.0
         self._is_topmost = False
         self._schedule_running = False
         self._sched_thread: threading.Thread | None = None
@@ -1322,6 +1335,27 @@ class SponsorMainWindow(QMainWindow):
                 QTimer.singleShot(0, self.hide)
         super().changeEvent(event)
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is getattr(self, "_w_app_title", None) and event.type() == QEvent.Type.MouseButtonPress:
+            if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
+                self._on_app_title_secret_tap()
+        return super().eventFilter(watched, event)
+
+    def _on_app_title_secret_tap(self) -> None:
+        now = time.monotonic()
+        if now - self._title_secret_tap_last > 2.5:
+            self._title_secret_tap_count = 0
+        self._title_secret_tap_last = now
+        self._title_secret_tap_count += 1
+        if self._title_secret_tap_count < 5:
+            return
+        self._title_secret_tap_count = 0
+        self._dashboard_test_mode = not self._dashboard_test_mode
+        self._refresh_dashboard()
+        cw = self._compact_win
+        if cw is not None and cw.isVisible():
+            cw.refresh()
+
     # --- header / pages ---
     def _build_ui(self):
         central = QWidget()
@@ -1466,6 +1500,7 @@ class SponsorMainWindow(QMainWindow):
         root.addWidget(self._stack, 1)
 
         self._init_dashboard_layout()
+        self._w_app_title.installEventFilter(self)
         self._bootstrap_dashboard_sync()
         self._refresh_dashboard()
         self._stack.setCurrentIndex(0)
@@ -1824,6 +1859,14 @@ class SponsorMainWindow(QMainWindow):
             self._btn_github_repo.setToolTip(
                 "" if _ok_repo else tr("settings.version.github_tip")
             )
+        if hasattr(self, "_lbl_version_privacy"):
+            self._lbl_version_privacy.setText(tr("settings.version.privacy_notice"))
+        if hasattr(self, "_lbl_version_copyright"):
+            self._lbl_version_copyright.setText(tr("settings.version.copyright_line"))
+        if hasattr(self, "_btn_version_x"):
+            self._btn_version_x.setText(tr("settings.version.btn_x"))
+        if hasattr(self, "_btn_version_site"):
+            self._btn_version_site.setText(tr("settings.version.btn_official_site"))
         if hasattr(self, "_compact_font_seg_btns"):
             self._compact_font_seg_group.blockSignals(True)
             try:
@@ -1917,6 +1960,37 @@ class SponsorMainWindow(QMainWindow):
         out["total_patron_count"] = total_pat
         out["today_increase_by_platform_jpy"] = filtered_today
         out["today_positive_increase_jpy"] = today_pos_sum
+        if getattr(self, "_dashboard_test_mode", False):
+            v2 = self._platform_visibility()
+            fp: list[dict] = []
+            ta = 0.0
+            tp = 0
+            ftoday: dict[str, float] = {}
+            for key in _PLATFORM_ORDER:
+                if not v2.get(key, True):
+                    continue
+                fp.append(
+                    {
+                        "platform": key,
+                        "amount": _DASH_TEST_PLATFORM_AMT,
+                        "patron_count": _DASH_TEST_PLATFORM_PATRONS,
+                        "change_amount": _DASH_TEST_TODAY_INCR,
+                        "change_percent": None,
+                        "currency": "JPY",
+                        "last_updated": "2099-12-31 12:00:00",
+                    }
+                )
+                ta += _DASH_TEST_PLATFORM_AMT
+                tp += _DASH_TEST_PLATFORM_PATRONS
+                ftoday[key] = _DASH_TEST_TODAY_INCR
+            out["by_platform"] = fp
+            out["total_amount"] = ta
+            out["total_patron_count"] = tp
+            out["today_increase_by_platform_jpy"] = ftoday
+            out["today_positive_increase_jpy"] = float(sum(ftoday.values()))
+            out["change_vs_yesterday"] = None
+            out["change_pct_vs_yesterday"] = None
+            out["patron_change"] = None
         return out
 
     def _on_platform_visibility_toggled(self, key: str, on: bool) -> None:
@@ -3141,6 +3215,37 @@ class SponsorMainWindow(QMainWindow):
             self._btn_github_repo.setToolTip(tr("settings.version.github_tip"))
         vl.addWidget(self._btn_github_repo)
         right.addWidget(ver_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(right, "settings.group.copyright")
+        copyright_card = _make_settings_group_card(card_parent)
+        cvl = QVBoxLayout(copyright_card)
+        cvl.setContentsMargins(14, 12, 14, 12)
+        cvl.setSpacing(10)
+        self._lbl_version_privacy = QLabel(tr("settings.version.privacy_notice"))
+        self._lbl_version_privacy.setObjectName("settingsFormLabel")
+        self._lbl_version_privacy.setWordWrap(True)
+        cvl.addWidget(self._lbl_version_privacy)
+        self._lbl_version_copyright = QLabel(tr("settings.version.copyright_line"))
+        self._lbl_version_copyright.setObjectName("settingsFormLabel")
+        self._lbl_version_copyright.setWordWrap(True)
+        cvl.addWidget(self._lbl_version_copyright)
+        ver_link_row = QHBoxLayout()
+        ver_link_row.setSpacing(8)
+        self._btn_version_x = QPushButton(tr("settings.version.btn_x"))
+        self._btn_version_x.setMinimumHeight(36)
+        self._btn_version_x.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://x.com/orz_can"))
+        )
+        self._btn_version_site = QPushButton(tr("settings.version.btn_official_site"))
+        self._btn_version_site.setMinimumHeight(36)
+        self._btn_version_site.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl("https://www.paintcanfarm.com/"))
+        )
+        ver_link_row.addWidget(self._btn_version_x, 1)
+        ver_link_row.addWidget(self._btn_version_site, 1)
+        cvl.addLayout(ver_link_row)
+        right.addWidget(copyright_card)
         right.addSpacing(_SETTINGS_SECTION_VGAP)
 
         right.addStretch(1)
