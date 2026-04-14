@@ -28,8 +28,8 @@ Portable Windows app to **track combined sponsorship revenue** from **Patreon**,
 
 ### 更新與版本
 
-- 程式內建版本號見 **`src/version.py`** 的 `APP_VERSION`（目前版本為 `1.14.1`）。
-- **GitHub**：推送 **`v*`** 標籤（例如 `v1.14.1`）會觸發 Actions 建置並上傳 **`SponsorTracker-Windows-v{version}.zip`**。一鍵更新需要 Release 上的**自訂 zip**（內含 `贊助額追蹤.exe` 與 `_internal`），請勿僅依賴「Source code」自動壓縮檔。
+- 程式內建版本號見 **`src/version.py`** 的 `APP_VERSION`（目前版本為 `1.14.2`）。
+- **GitHub**：推送 **`v*`** 標籤（例如 `v1.14.2`）會觸發 Actions 建置並上傳 **`SponsorTracker-Windows-v{version}.zip`**。一鍵更新需要 Release 上的**自訂 zip**（內含 `贊助額追蹤.exe` 與 `_internal`），請勿僅依賴「Source code」自動壓縮檔。
 - 本機打包 zip：`.\scripts\build_windows_zip.ps1`（需已安裝 `requirements-build.txt`）。
 
 ### 設定倉庫
@@ -60,8 +60,8 @@ A **portable Windows** tool for creators to monitor **combined sponsorship incom
 
 ### Releases & versioning
 
-- Bump **`APP_VERSION`** in `src/version.py` (current release line is **`1.14.1`**).
-- Push a git tag like **`v1.14.1`**. The **Release** workflow builds PyInstaller output and uploads **`SponsorTracker-Windows-v1.14.1.zip`**.
+- Bump **`APP_VERSION`** in `src/version.py` (current release line is **`1.14.2`**).
+- Push a git tag like **`v1.14.2`**. The **Release** workflow builds PyInstaller output and uploads **`SponsorTracker-Windows-v1.14.2.zip`**.
 - Local zip: `.\scripts\build_windows_zip.ps1` after `pip install -r requirements.txt -r requirements-build.txt`.
 
 ---
@@ -88,8 +88,8 @@ A **portable Windows** tool for creators to monitor **combined sponsorship incom
 
 ### リリース
 
-- バージョンは **`src/version.py`** の `APP_VERSION`（現在は **`1.14.1`**）。
-- **`v1.14.1`** のような **タグを push** すると GitHub Actions がビルドし、**`SponsorTracker-Windows-v1.14.1.zip`** を Release に添付します。
+- バージョンは **`src/version.py`** の `APP_VERSION`（現在は **`1.14.2`**）。
+- **`v1.14.2`** のような **タグを push** すると GitHub Actions がビルドし、**`SponsorTracker-Windows-v1.14.2.zip`** を Release に添付します。
 - 手元で zip：`.\scripts\build_windows_zip.ps1`
 
 ---

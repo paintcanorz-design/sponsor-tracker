@@ -135,7 +135,6 @@ from src.i18n import (
 )
 from src.qt_app.ui_assets import (
     compact_open_main_icon,
-    compact_pin_icon,
     mini_dashboard_icon_on_accent,
     nav_account_icon,
     nav_overview_icon,
@@ -595,20 +594,6 @@ def _compact_window_stylesheet() -> str:
         color: {c["text"]} !important;
         background: transparent;
     }}
-    QToolButton#compactPinBtn {{
-        background: transparent;
-        border: none;
-        border-radius: 6px;
-        padding: 1px;
-        min-width: 22px;
-        min-height: 22px;
-    }}
-    QToolButton#compactPinBtn:hover {{
-        background-color: {c["segment_hover"]};
-    }}
-    QToolButton#compactPinBtn:checked {{
-        background-color: {c["accent_soft"]};
-    }}
     QToolButton#compactTool {{
         background-color: transparent;
         border: 1px solid {c["border_light"]};
@@ -708,7 +693,7 @@ class CompactFloatWindow(QWidget):
         self._compact_move_shrink_timer.timeout.connect(self._shrink_compact_window)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setWindowTitle(tr("app.title_compact"))
-        self.setMinimumWidth(296)
+        self.setMinimumWidth(200)
         self.setMaximumWidth(16777215)
         self.setMaximumHeight(16777215)
         self.setStyleSheet(_compact_window_stylesheet())
@@ -727,7 +712,7 @@ class CompactFloatWindow(QWidget):
 
         outer = QFrame()
         outer.setObjectName("compactOuter")
-        outer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        outer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         _sh = QGraphicsDropShadowEffect(outer)
         _sh.setBlurRadius(18)
         _sh.setColor(QColor(0, 0, 0, 38))
@@ -739,7 +724,7 @@ class CompactFloatWindow(QWidget):
 
         inner = QFrame()
         inner.setObjectName("compactInner")
-        inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        inner.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         il = QVBoxLayout(inner)
         il.setContentsMargins(0, 0, 0, 0)
         il.setSpacing(0)
@@ -747,12 +732,12 @@ class CompactFloatWindow(QWidget):
         panel = QWidget()
         self._compact_panel = panel
         panel.setObjectName("compactPanel")
-        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         panel.customContextMenuRequested.connect(lambda p: self._show_compact_menu(panel, p))
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(10, 8, 10, 10)
-        pl.setSpacing(5)
+        pl.setContentsMargins(6, 6, 6, 6)
+        pl.setSpacing(4)
 
         row_total = QHBoxLayout()
         row_total.setSpacing(6)
@@ -761,29 +746,10 @@ class CompactFloatWindow(QWidget):
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
         row_total.addWidget(self._total_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         row_total.addStretch(1)
-        self._patrons_lbl = QLabel("")
-        self._patrons_lbl.setFont(_qf(13, False))
-        self._patrons_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
-        self._patrons_lbl.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        row_total.addWidget(self._patrons_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._inc_arrow_lbl = QLabel("")
         self._inc_arrow_lbl.setFont(_qf(11, True))
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         row_total.addWidget(self._inc_arrow_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._btn_compact_pin = QToolButton()
-        self._btn_compact_pin.setObjectName("compactPinBtn")
-        self._btn_compact_pin.setCheckable(True)
-        self._btn_compact_pin.setChecked(
-            bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
-        )
-        self._btn_compact_pin.setToolTip(tr("header.pin"))
-        self._btn_compact_pin.setAutoRaise(True)
-        self._btn_compact_pin.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._btn_compact_pin.toggled.connect(self._on_topmost_toggled)
-        self._sync_compact_pin_icon()
-        row_total.addWidget(self._btn_compact_pin, 0, Qt.AlignmentFlag.AlignVCenter)
         self._btn_compact_open_main = QToolButton()
         self._btn_compact_open_main.setObjectName("compactChromeBtn")
         _arrow_col = PALETTE["text_tertiary"]
@@ -807,13 +773,18 @@ class CompactFloatWindow(QWidget):
         pl.addWidget(self._increase_lbl)
 
         self._plat_host = QWidget()
-        self._plat_grid = QGridLayout(self._plat_host)
-        self._plat_grid.setContentsMargins(0, 2, 0, 0)
-        self._plat_grid.setHorizontalSpacing(8)
+        self._plat_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._plat_box = QVBoxLayout(self._plat_host)
+        self._plat_box.setContentsMargins(0, 2, 0, 0)
+        self._plat_box.setSpacing(3)
+        self._plat_box.setAlignment(Qt.AlignmentFlag.AlignTop)
         pl.addWidget(self._plat_host)
 
-        _fm = QFontMetrics(_qf(15, True))
-        self._plat_amount_min_w = _fm.horizontalAdvance("NT$9,999,999") + 6
+        _fm_plat = QFontMetrics(_qf(13, True))
+        _sample_amt = format_money_jpy_as_display(9_999_999.0, app.config)
+        self._plat_line_min_w = max(
+            _fm_plat.horizontalAdvance(f"\u25cf {n}  {_sample_amt}") for n in self._PLAT_NAMES.values()
+        ) + 8
 
         il.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
         ol.addWidget(inner, 0, Qt.AlignmentFlag.AlignTop)
@@ -874,13 +845,7 @@ class CompactFloatWindow(QWidget):
         self._app._hide_compact()
 
     def _compact_drag_allowed(self, watched: QObject) -> bool:
-        return watched not in (self._btn_compact_open_main, self._btn_compact_pin)
-
-    def _sync_compact_pin_icon(self) -> None:
-        on = self._btn_compact_pin.isChecked()
-        col = PALETTE["accent"] if on else PALETTE["text_tertiary"]
-        self._btn_compact_pin.setIcon(compact_pin_icon(size=12, color=col))
-        self._btn_compact_pin.setIconSize(QSize(12, 12))
+        return watched is not self._btn_compact_open_main
 
     def eventFilter(self, watched, event):
         if isinstance(event, QMouseEvent) and self._compact_drag_allowed(watched):
@@ -906,11 +871,6 @@ class CompactFloatWindow(QWidget):
 
     def _show_compact_menu(self, host: QWidget, pos: QPoint):
         menu = QMenu(self)
-        act_top = QAction(tr("header.pin"), self)
-        act_top.setCheckable(True)
-        act_top.setChecked(bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
-        act_top.toggled.connect(self._on_topmost_toggled)
-        menu.addAction(act_top)
         act_up = QAction(tr("tray.update"), self)
         act_up.triggered.connect(self._app._run_update)
         menu.addAction(act_up)
@@ -919,24 +879,15 @@ class CompactFloatWindow(QWidget):
         menu.addAction(act_main)
         menu.exec(host.mapToGlobal(pos))
 
-    def _on_topmost_toggled(self, on: bool):
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
-        self._btn_compact_pin.blockSignals(True)
-        self._btn_compact_pin.setChecked(bool(on))
-        self._btn_compact_pin.blockSignals(False)
-        self._sync_compact_pin_icon()
-        self.show()
-
-    def _clear_plat_grid(self) -> None:
-        while self._plat_grid.count():
-            item = self._plat_grid.takeAt(0)
+    def _clear_plat_box(self) -> None:
+        while self._plat_box.count():
+            item = self._plat_box.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
 
     def refresh(self, stats: dict | None = None):
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
-        self._patrons_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._increase_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         if stats is None:
@@ -950,17 +901,12 @@ class CompactFloatWindow(QWidget):
         total = float(s.get("total_amount") or 0)
         cfg = self._app.config
         self._total_lbl.setText(format_money_jpy_as_display(total, cfg))
-        patrons = int(s.get("total_patron_count") or 0)
-        pp = tr("common.people")
-        self._patrons_lbl.setText(
-            f"{patrons:,} {pp}".strip() if pp else f"{patrons:,}"
-        )
         fx = fx_dict_from_config(cfg)
         uj = float(fx.get("usd_jpy") or 150)
         platforms = s.get("by_platform") or []
         tc = PALETTE["text"]
-        self._clear_plat_grid()
-        for col, p in enumerate(platforms):
+        self._clear_plat_box()
+        for p in platforms:
             plat = str(p.get("platform") or "")
             amt = float(p.get("amount") or 0)
             cur = (p.get("currency") or "JPY").upper()
@@ -972,24 +918,23 @@ class CompactFloatWindow(QWidget):
             }.get(plat, PALETTE["accent"])
             name = self._PLAT_NAMES.get(plat, plat)
             name_esc = html.escape(name)
-            line1 = (
-                f"<span style='color:{color}; font-weight:600; font-size:11px; "
-                f"letter-spacing:0.2px'>\u25cf {name_esc}</span>"
-            )
-            line2 = (
-                f"<span style='color:{tc}; font-weight:700; font-size:15px; "
-                f"letter-spacing:-0.35px'>{html.escape(format_money_jpy_as_display(amt_jpy, cfg))}</span>"
+            amt_s = html.escape(format_money_jpy_as_display(amt_jpy, cfg))
+            line = (
+                f"<span style='color:{color}; font-weight:600; font-size:10px; "
+                f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
+                f"&nbsp;&nbsp;"
+                f"<span style='color:{tc}; font-weight:700; font-size:13px; "
+                f"letter-spacing:-0.3px'>{amt_s}</span>"
             )
             lbl = QLabel()
             lbl.setTextFormat(Qt.TextFormat.RichText)
-            lbl.setWordWrap(True)
-            lbl.setMinimumHeight(30)
-            lbl.setMinimumWidth(self._plat_amount_min_w)
-            lbl.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            lbl.setText(line1 + "<br>" + line2)
-            self._plat_grid.addWidget(lbl, 0, col, Qt.AlignmentFlag.AlignTop)
-            self._plat_grid.setColumnStretch(col, 1)
+            lbl.setWordWrap(False)
+            lbl.setMinimumHeight(22)
+            lbl.setMinimumWidth(self._plat_line_min_w)
+            lbl.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            lbl.setText(line)
+            self._plat_box.addWidget(lbl, 0, Qt.AlignmentFlag.AlignLeft)
         inc_this = getattr(self._app, "_last_update_increase", None) or 0
         if inc_this > 0:
             self._increase_lbl.setText(
@@ -1659,8 +1604,6 @@ class SponsorMainWindow(QMainWindow):
             cw.setToolTip(tr("compact.tooltip"))
             if hasattr(cw, "_btn_compact_open_main"):
                 cw._btn_compact_open_main.setToolTip(tr("compact.open_main"))
-            if hasattr(cw, "_btn_compact_pin"):
-                cw._btn_compact_pin.setToolTip(tr("header.pin"))
             cw.refresh()
         for lbl, key in self._settings_i18n_headings:
             lbl.setText(tr(key))
@@ -1834,11 +1777,22 @@ class SponsorMainWindow(QMainWindow):
             s_lbl.setFont(_qf(12))
             s_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
             s_lbl.setWordWrap(True)
+            val_row = QHBoxLayout()
+            val_row.setContentsMargins(0, 0, 0, 0)
+            val_row.setSpacing(8)
+            val_row.addWidget(v_lbl, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            val_row.addStretch(1)
+            rise_lbl = QLabel("")
+            r_sz = 12 if col == 0 else 11
+            rise_lbl.setFont(_qf(r_sz, True))
+            rise_lbl.setWordWrap(False)
+            rise_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            val_row.addWidget(rise_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
             lay.addWidget(t_lbl)
-            lay.addWidget(v_lbl)
+            lay.addLayout(val_row)
             lay.addWidget(s_lbl)
             self._dash_hero_grid.addWidget(card, 0, col)
-            self._hero_cells.append({"title": t_lbl, "value": v_lbl, "sub": s_lbl})
+            self._hero_cells.append({"title": t_lbl, "value": v_lbl, "sub": s_lbl, "today_rise": rise_lbl})
 
         self._plat_empty = _make_card(self._dash_platforms, "platTile")
         pel = QVBoxLayout(self._plat_empty)
@@ -2240,6 +2194,21 @@ class SponsorMainWindow(QMainWindow):
             h3["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
             h3["sub"].setText("")
         h3["sub"].setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
+
+        today_up = float(s.get("today_positive_increase_jpy") or 0)
+        rise_disp = (
+            format_money_jpy_as_display(today_up, self.config, signed=True)
+            if today_up > 0
+            else "\u2014"
+        )
+        rise_style = (
+            f"color: {PALETTE['success']} !important; letter-spacing: -0.35px;"
+            if today_up > 0
+            else f"color: {PALETTE['text_tertiary']} !important;"
+        )
+        for hi in self._hero_cells:
+            hi["today_rise"].setText(rise_disp)
+            hi["today_rise"].setStyleSheet(rise_style)
 
         platforms = s.get("by_platform") or []
         nplat = len(platforms)
