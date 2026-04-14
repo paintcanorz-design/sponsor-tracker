@@ -73,6 +73,13 @@ from PySide6.QtWidgets import (
 
 from src.paths import project_root
 from src.jst import date_days_ago_jst, now_jst, today_jst_str
+from src.currency_ui import (
+    display_currency_code,
+    format_money_jpy_as_display,
+    fx_dict_from_config,
+    jpy_to_display_amount,
+    platform_native_to_jpy,
+)
 from src.database import (
     clear_sponsorship_data,
     export_daily_summary_csv,
@@ -84,6 +91,7 @@ from src.database import (
     update_daily_summary,
     get_dashboard_stats,
 )
+from src.exchange import ensure_fx_daily, sync_fx_cache_from_config
 from src.fetchers.patreon_fetcher import PatreonFetcher
 from src.fetchers.fanbox_fetcher import FanboxFetcher
 from src.fetchers.fantia_fetcher import FantiaFetcher
@@ -130,7 +138,7 @@ from src.i18n import (
 from src.qt_app.ui_assets import (
     compact_open_main_icon,
     compact_pin_icon,
-    mini_dashboard_icon,
+    mini_dashboard_icon_on_accent,
     nav_account_icon,
     nav_overview_icon,
     nav_settings_icon,
@@ -288,16 +296,16 @@ def _app_stylesheet() -> str:
         color: {c["text_tertiary"]} !important;
         font-size: 12px; letter-spacing: 0.1px;
     }}
-    QFrame#headerSegment {{
+    QLabel#headerFxRate {{
+        color: {c["text_tertiary"]} !important;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.05px;
+    }}
+    QFrame#headerFxBlock {{
         background-color: {c["bg_elevated"]};
         border-radius: 12px;
         border: 1px solid {c["border_light"]};
-    }}
-    QFrame#headerSep {{
-        background-color: {c["hairline"]};
-        border: none;
-        max-width: 1px;
-        min-width: 1px;
     }}
     QPushButton#headerPill {{
         background-color: transparent;
@@ -340,47 +348,22 @@ def _app_stylesheet() -> str:
         color: #ffffff;
     }}
 
-    QLabel#pinLabel {{
-        color: {c["text_tertiary"]} !important;
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.2px;
-    }}
-    QCheckBox#pinSwitch {{
-        spacing: 0px;
-    }}
-    QCheckBox#pinSwitch::indicator {{
-        width: 44px;
-        height: 26px;
-        border-radius: 13px;
-        background-color: {c["border_light"]};
-        border: none;
-    }}
-    QCheckBox#pinSwitch::indicator:checked {{
-        background-color: {c["accent"]};
-    }}
-    QCheckBox#pinSwitch::indicator:hover {{
-        background-color: {c["border"]};
-    }}
-    QCheckBox#pinSwitch::indicator:checked:hover {{
-        background-color: {c["accent_hover"]};
-    }}
-
     QPushButton#headerMiniPill {{
-        background-color: {c["segment_bg"]};
-        color: {c["text"]};
+        background-color: {c["accent"]};
+        color: #ffffff;
         border: none;
-        border-radius: 10px;
-        padding: 0px 12px;
-        min-height: 34px;
-        font-size: 12px;
-        font-weight: 600;
+        border-radius: 11px;
+        padding: 2px 16px 2px 12px;
+        min-height: 38px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
     }}
     QPushButton#headerMiniPill:hover {{
-        background-color: {c["segment_hover"]};
+        background-color: {c["accent_hover"]};
     }}
     QPushButton#headerMiniPill:pressed {{
-        background-color: {c["border_light"]};
+        background-color: {c["accent"]};
     }}
 
     /* ── Card System ───────────────────────────────────────── */
@@ -950,13 +933,15 @@ class CompactFloatWindow(QWidget):
             s = stats
         s = self._app._filter_stats_for_dashboard(s)
         total = float(s.get("total_amount") or 0)
-        self._total_lbl.setText(f"\u00a5{total:,.0f}")
+        cfg = self._app.config
+        self._total_lbl.setText(format_money_jpy_as_display(total, cfg))
         patrons = int(s.get("total_patron_count") or 0)
         pp = tr("common.people")
         self._patrons_lbl.setText(
             f"{patrons:,} {pp}".strip() if pp else f"{patrons:,}"
         )
-        rate = float(s.get("fx_usd_jpy") or 150)
+        fx = fx_dict_from_config(cfg)
+        uj = float(fx.get("usd_jpy") or 150)
         platforms = s.get("by_platform") or []
         tc = PALETTE["text"]
         self._clear_plat_grid()
@@ -964,8 +949,7 @@ class CompactFloatWindow(QWidget):
             plat = str(p.get("platform") or "")
             amt = float(p.get("amount") or 0)
             cur = (p.get("currency") or "JPY").upper()
-            if plat == "patreon" and cur == "USD":
-                amt *= rate
+            amt_jpy = platform_native_to_jpy(amt, plat, cur, uj)
             color = {
                 "patreon": PALETTE["patreon"],
                 "fanbox": PALETTE["fanbox"],
@@ -979,7 +963,7 @@ class CompactFloatWindow(QWidget):
             )
             line2 = (
                 f"<span style='color:{tc}; font-weight:700; font-size:15px; "
-                f"letter-spacing:-0.35px'>\u00a5{amt:,.0f}</span>"
+                f"letter-spacing:-0.35px'>{html.escape(format_money_jpy_as_display(amt_jpy, cfg))}</span>"
             )
             lbl = QLabel()
             lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -993,7 +977,13 @@ class CompactFloatWindow(QWidget):
             self._plat_grid.setColumnStretch(col, 1)
         inc_this = getattr(self._app, "_last_update_increase", None) or 0
         if inc_this > 0:
-            self._increase_lbl.setText(f"\u25b2 +\u00a5{inc_this:,.0f}")
+            self._increase_lbl.setText(
+                f"\u25b2 "
+                + tr(
+                    "dash.sub.this_update",
+                    amt=format_money_jpy_as_display(float(inc_this), cfg, signed=True),
+                )
+            )
             self._increase_lbl.show()
         else:
             self._increase_lbl.setText("")
@@ -1049,8 +1039,6 @@ class SponsorMainWindow(QMainWindow):
         self._stack: QStackedWidget | None = None
         self._nav_group: QButtonGroup | None = None
         self._nav_btns: list[QPushButton] = []
-        self._pin_switch: QCheckBox | None = None
-        self._pin_label: QLabel | None = None
         self._compact_win: CompactFloatWindow | None = None
         self._is_topmost = False
         self._schedule_running = False
@@ -1085,8 +1073,10 @@ class SponsorMainWindow(QMainWindow):
             self._on_oneclick_dl_progress, Qt.ConnectionType.QueuedConnection
         )
 
+        sync_fx_cache_from_config(self.config)
         init_db()
         self._build_ui()
+        QTimer.singleShot(0, self._refresh_header_fx_labels)
         self._init_tray()
         QTimer.singleShot(120, self._ensure_daily_report_thread)
         QTimer.singleShot(80, self._apply_schedule_preferences)
@@ -1199,7 +1189,7 @@ class SponsorMainWindow(QMainWindow):
         try:
             s = self._filter_stats_for_dashboard(get_dashboard_stats())
             total = float(s.get("total_amount") or 0)
-            text = f"\u00a5{total:,.0f}"
+            text = format_money_jpy_as_display(float(total), self.config)
         except Exception:
             text = ""
         QGuiApplication.clipboard().setText(text)
@@ -1271,32 +1261,22 @@ class SponsorMainWindow(QMainWindow):
         title_block.addWidget(t2)
         hl.addLayout(title_block)
         hl.addStretch(1)
-        seg = QFrame()
-        seg.setObjectName("headerSegment")
-        seg.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        seg_l = QHBoxLayout(seg)
-        seg_l.setContentsMargins(10, 5, 6, 5)
-        seg_l.setSpacing(10)
-        self._pin_label = QLabel(tr("header.pin"))
-        self._pin_label.setObjectName("pinLabel")
-        seg_l.addWidget(self._pin_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._pin_switch = QCheckBox()
-        self._pin_switch.setObjectName("pinSwitch")
-        self._pin_switch.toggled.connect(self._on_pin_switch_toggled)
-        seg_l.addWidget(self._pin_switch, 0, Qt.AlignmentFlag.AlignVCenter)
-        _sep_h = QFrame()
-        _sep_h.setObjectName("headerSep")
-        _sep_h.setFixedHeight(22)
-        seg_l.addWidget(_sep_h, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._btn_header_mini = QPushButton(tr("header.mini"))
-        self._btn_header_mini.setObjectName("headerMiniPill")
-        self._btn_header_mini.setIcon(mini_dashboard_icon())
-        self._btn_header_mini.setIconSize(QSize(18, 18))
-        self._btn_header_mini.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self._btn_header_mini.setToolTip(tr("header.mini"))
-        self._btn_header_mini.clicked.connect(self._show_compact)
-        seg_l.addWidget(self._btn_header_mini)
-        hl.addWidget(seg, 0, Qt.AlignmentFlag.AlignVCenter)
+        fx_wrap = QFrame()
+        fx_wrap.setObjectName("headerFxBlock")
+        fx_wrap.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        fxl = QHBoxLayout(fx_wrap)
+        fxl.setContentsMargins(10, 5, 10, 5)
+        fxl.setSpacing(12)
+        self._lbl_fx_twd_jpy = QLabel("")
+        self._lbl_fx_usd_jpy = QLabel("")
+        self._lbl_fx_usd_twd = QLabel("")
+        for _fxlb in (self._lbl_fx_twd_jpy, self._lbl_fx_usd_jpy, self._lbl_fx_usd_twd):
+            _fxlb.setObjectName("headerFxRate")
+        fxl.addWidget(self._lbl_fx_twd_jpy, 0, Qt.AlignmentFlag.AlignVCenter)
+        fxl.addWidget(self._lbl_fx_usd_jpy, 0, Qt.AlignmentFlag.AlignVCenter)
+        fxl.addWidget(self._lbl_fx_usd_twd, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addWidget(fx_wrap, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addSpacing(10)
         nav_bar = QFrame()
         nav_bar.setObjectName("navTabBar")
         nav_bar.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
@@ -1321,6 +1301,15 @@ class SponsorMainWindow(QMainWindow):
             self._nav_btns.append(b)
         self._nav_group.idClicked.connect(self._on_main_nav)
         hl.addWidget(nav_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addSpacing(12)
+        self._btn_header_mini = QPushButton(tr("header.mini"))
+        self._btn_header_mini.setObjectName("headerMiniPill")
+        self._btn_header_mini.setIcon(mini_dashboard_icon_on_accent(size=24))
+        self._btn_header_mini.setIconSize(QSize(24, 24))
+        self._btn_header_mini.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self._btn_header_mini.setToolTip(tr("header.mini"))
+        self._btn_header_mini.clicked.connect(self._show_compact)
+        hl.addWidget(self._btn_header_mini, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header)
         self._nav_btns[0].setChecked(True)
 
@@ -1440,6 +1429,15 @@ class SponsorMainWindow(QMainWindow):
             with QSignalBlocker(self._act_top):
                 self._act_top.setChecked(self._is_topmost)
 
+    def _refresh_header_fx_labels(self) -> None:
+        if not hasattr(self, "_lbl_fx_twd_jpy"):
+            return
+        self.config = load_config()
+        fx = fx_dict_from_config(self.config)
+        self._lbl_fx_twd_jpy.setText(f"{tr('header.fx.twd_jpy')} {fx['twd_jpy']:.4f}")
+        self._lbl_fx_usd_jpy.setText(f"{tr('header.fx.usd_jpy')} {fx['usd_jpy']:.2f}")
+        self._lbl_fx_usd_twd.setText(f"{tr('header.fx.usd_twd')} {fx['usd_twd']:.2f}")
+
     def _refresh_sched_summary_line(self) -> None:
         if not hasattr(self, "_sched_summary_lbl"):
             return
@@ -1451,17 +1449,15 @@ class SponsorMainWindow(QMainWindow):
             if not t:
                 self._sched_summary_lbl.setText(tr("settings.sched.summary_none"))
                 return
+            total_s = format_money_jpy_as_display(float(total), self.config)
             self._sched_summary_lbl.setText(
-                tr("settings.sched.summary", t=t, total=total, patrons=patrons)
+                tr("settings.sched.summary", t=t, total=total_s, patrons=patrons)
             )
         except Exception:
             self._sched_summary_lbl.setText(tr("settings.sched.summary_none"))
 
     def _toggle_topmost(self):
-        if self._pin_switch is not None:
-            self._pin_switch.setChecked(not self._pin_switch.isChecked())
-        else:
-            self._on_pin_switch_toggled(not self._is_topmost)
+        self._on_pin_switch_toggled(not self._is_topmost)
 
     def _show_compact(self):
         if self._compact_win and self._compact_win.isVisible():
@@ -1513,6 +1509,36 @@ class SponsorMainWindow(QMainWindow):
         save_config(self.config)
         set_language(effective_ui_language(self.config))
         self._apply_full_retranslate()
+
+    def _on_display_currency_changed(self, _idx: int = 0) -> None:
+        combo = getattr(self, "_display_currency_combo", None)
+        if combo is None:
+            return
+        raw = combo.currentData()
+        if raw is None:
+            return
+        code = str(raw).strip().lower()
+        if code not in ("jpy", "twd", "usd"):
+            return
+        self.config = load_config()
+        self.config.setdefault("gui", {})["display_currency"] = code
+        save_config(self.config)
+        try:
+            s = self._filter_stats_for_dashboard(get_dashboard_stats())
+            p = get_total_vs_days_ago(7)
+        except Exception:
+            s, p = None, None
+        if s is not None:
+            self._paint_dashboard_view(s, p)
+        try:
+            self._refresh_trend_chart()
+        except Exception:
+            pass
+        self._refresh_sched_summary_line()
+        self._refresh_header_fx_labels()
+        cw = self._compact_win
+        if cw is not None and cw.isVisible():
+            cw.refresh()
 
     def _rebuild_sched_interval_combo(self, select_sid: str | None = None) -> None:
         if not hasattr(self, "_sched_interval"):
@@ -1585,11 +1611,10 @@ class SponsorMainWindow(QMainWindow):
             self._w_app_title.setText(tr("app.title"))
         if self._w_app_subtitle:
             self._w_app_subtitle.setText(tr("app.subtitle"))
-        if self._pin_label is not None:
-            self._pin_label.setText(tr("header.pin"))
         if hasattr(self, "_btn_header_mini"):
             self._btn_header_mini.setText(tr("header.mini"))
             self._btn_header_mini.setToolTip(tr("header.mini"))
+            self._btn_header_mini.setIcon(mini_dashboard_icon_on_accent(size=24))
         if self._nav_btns:
             _nav_keys = ("nav.tab.overview", "nav.tab.settings", "nav.tab.account")
             _icons = (nav_overview_icon(), nav_settings_icon(), nav_account_icon())
@@ -1666,6 +1691,21 @@ class SponsorMainWindow(QMainWindow):
                 for i, (_val, lk) in enumerate(pairs):
                     if i < self._ui_lang_combo.count():
                         self._ui_lang_combo.setItemText(i, tr(lk))
+        if hasattr(self, "_display_currency_combo"):
+            _cur_sel = self._display_currency_combo.currentData()
+            pairs_dc = (
+                ("jpy", "settings.currency.jpy"),
+                ("twd", "settings.currency.twd"),
+                ("usd", "settings.currency.usd"),
+            )
+            with QSignalBlocker(self._display_currency_combo):
+                for i, (_code, lk) in enumerate(pairs_dc):
+                    if i < self._display_currency_combo.count():
+                        self._display_currency_combo.setItemText(i, tr(lk))
+                for i in range(self._display_currency_combo.count()):
+                    if self._display_currency_combo.itemData(i) == _cur_sel:
+                        self._display_currency_combo.setCurrentIndex(i)
+                        break
         if hasattr(self, "update_btn"):
             self.update_btn.setText(tr("settings.fetch"))
         self._refresh_schedule_button_and_status()
@@ -1940,19 +1980,24 @@ class SponsorMainWindow(QMainWindow):
             chart.removeSeries(s)
         for ax in list(chart.axes()):
             chart.removeAxis(ax)
+        self.config = load_config()
+        _dcc = display_currency_code(self.config)
+        _fx = fx_dict_from_config(self.config)
         series = QLineSeries()
         if mode == "30d":
             for date_str, amt, _ in data:
                 dt = QDateTime.fromString(f"{date_str} 12:00:00", "yyyy-MM-dd HH:mm:ss")
                 if not dt.isValid():
                     continue
-                series.append(float(dt.toMSecsSinceEpoch()), float(amt))
+                yv = jpy_to_display_amount(float(amt), _dcc, _fx)
+                series.append(float(dt.toMSecsSinceEpoch()), float(yv))
         else:
             for date_str, amt in data:
                 dt = QDateTime.fromString(f"{date_str} 12:00:00", "yyyy-MM-dd HH:mm:ss")
                 if not dt.isValid():
                     continue
-                series.append(float(dt.toMSecsSinceEpoch()), float(amt))
+                yv = jpy_to_display_amount(float(amt), _dcc, _fx)
+                series.append(float(dt.toMSecsSinceEpoch()), float(yv))
         pen = QPen(QColor(PALETTE["accent"]))
         pen.setWidthF(2.5)
         series.setPen(pen)
@@ -1973,17 +2018,32 @@ class SponsorMainWindow(QMainWindow):
         axis_y = QValueAxis()
         axis_y.setLabelsColor(QColor(PALETTE["text_secondary"]))
         axis_y.setGridLineColor(QColor(PALETTE["hairline"]))
-        axis_y.setLabelFormat("%d")
+        if _dcc == "usd":
+            axis_y.setLabelFormat("%.2f")
+        else:
+            axis_y.setLabelFormat("%.0f")
         if data:
-            ys = [float(row[1]) for row in data]
+            ys = [jpy_to_display_amount(float(row[1]), _dcc, _fx) for row in data]
             lo, hi = min(ys), max(ys)
-            span = max(hi - lo, abs(hi) * 0.02, 500.0)
-            pad = max(span * 0.12, 1.0)
-            y_lo = math.floor(lo - pad)
-            y_hi = math.ceil(hi + pad)
-            if y_lo == y_hi:
-                y_hi = y_lo + 1
-            axis_y.setRange(y_lo, y_hi)
+            span = max(hi - lo, abs(hi) * 0.02 if hi else 0.0, 1e-9)
+            pad = max(span * 0.12, 1e-9)
+            mag = max(abs(lo), abs(hi), abs(hi - lo))
+            if _dcc != "usd" and mag >= 1000:
+                y_lo = math.floor((lo - pad) / 1000) * 1000
+                y_hi = math.ceil((hi + pad) / 1000) * 1000
+                if y_hi <= y_lo:
+                    y_hi = y_lo + 1000
+                axis_y.setRange(y_lo, y_hi)
+                step = max(1000, int((y_hi - y_lo) / 4 // 1000) * 1000) or 1000
+                axis_y.setTickType(QValueAxis.TickType.TicksDynamic)
+                axis_y.setTickInterval(float(step))
+                axis_y.setTickAnchor(float(y_lo))
+            else:
+                y_lo = lo - pad
+                y_hi = hi + pad
+                if y_lo == y_hi:
+                    y_hi = y_lo + max(abs(y_lo) * 0.01, 0.01)
+                axis_y.setRange(y_lo, y_hi)
         else:
             axis_y.setRange(0, 1)
         chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
@@ -2111,13 +2171,18 @@ class SponsorMainWindow(QMainWindow):
         if not total:
             sub_parts.append(tr("dash.sub.run_first"))
         if inc_this > 0:
-            sub_parts.append(tr("dash.sub.this_update", amt=f"{inc_this:,.0f}"))
+            sub_parts.append(
+                tr(
+                    "dash.sub.this_update",
+                    amt=format_money_jpy_as_display(float(inc_this), self.config, signed=True),
+                )
+            )
         sub_total = "\n".join(sub_parts)
         h0["title"].setText(tr("dash.hero.total"))
         h0["title"].setStyleSheet(
             f"color: {PALETTE['text_secondary']} !important; letter-spacing: 0.5px; font-weight: 600; font-size: 12px;"
         )
-        h0["value"].setText(f"\u00a5{total:,.0f}")
+        h0["value"].setText(format_money_jpy_as_display(float(total), self.config))
         h0["value"].setStyleSheet(f"color: {PALETTE['text']} !important; letter-spacing: -0.5px;")
         h0["sub"].setText(sub_total)
         h0["sub"].setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
@@ -2142,7 +2207,9 @@ class SponsorMainWindow(QMainWindow):
         )
         if period:
             c2, pct2 = period["change_amount"], period["change_percent"]
-            v2 = f"\u00a5{c2:+,.0f}" + (f" ({pct2:+.1f}%)" if pct2 is not None else "")
+            v2 = format_money_jpy_as_display(float(c2), self.config, signed=True) + (
+                f" ({pct2:+.1f}%)" if pct2 is not None else ""
+            )
             h2["value"].setText(v2)
             if (c2 or 0) > 0:
                 c2_col = PALETTE["success"]
@@ -2151,7 +2218,7 @@ class SponsorMainWindow(QMainWindow):
             else:
                 c2_col = PALETTE["text_tertiary"]
             h2["value"].setStyleSheet(f"color: {c2_col} !important;")
-            h2["sub"].setText(tr("dash.sub.vs_week_snapshot", n=period["days"]))
+            h2["sub"].setText(tr("dash.sub.vs_week_snapshot"))
         else:
             h2["value"].setText("\u2014")
             h2["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
@@ -2164,7 +2231,9 @@ class SponsorMainWindow(QMainWindow):
         )
         if ch is not None:
             pct_s = f" ({pct:+.1f}%)" if pct is not None else ""
-            h3["value"].setText(f"\u00a5{ch:+,.0f}{pct_s}")
+            h3["value"].setText(
+                format_money_jpy_as_display(float(ch), self.config, signed=True) + pct_s
+            )
             if (ch or 0) > 0:
                 ch_col = PALETTE["success"]
             elif (ch or 0) < 0:
@@ -2213,7 +2282,11 @@ class SponsorMainWindow(QMainWindow):
                     cell["name"].setStyleSheet(f"color: {PALETTE['text']} !important;")
                     amt = float(p.get("amount") or 0)
                     cur = (p.get("currency") or "JPY").strip()
-                    cell["amount"].setText(f"{amt:,.0f} {cur}")
+                    uj = float(s.get("fx_usd_jpy") or 150)
+                    jpy_amt = platform_native_to_jpy(amt, plat, cur, uj)
+                    cell["amount"].setText(
+                        format_money_jpy_as_display(jpy_amt, self.config)
+                    )
                     cell["amount"].setStyleSheet(f"color: {PALETTE['text']} !important;")
                     pc = int(p.get("patron_count") or 0)
                     pp2 = tr("common.people")
@@ -2328,6 +2401,11 @@ class SponsorMainWindow(QMainWindow):
                 self.config = load_config()
                 results = {}
                 cfg = self.config
+                try:
+                    ensure_fx_daily(cfg)
+                    save_config(cfg)
+                except Exception:
+                    pass
 
                 def fetch_patreon():
                     pc = cfg.get("patreon", {})
@@ -2457,6 +2535,8 @@ class SponsorMainWindow(QMainWindow):
                     pass
         except Exception:
             self._last_update_increase = None
+        self.config = load_config()
+        self._refresh_header_fx_labels()
         if s is not None:
             self._apply_dashboard_ui_immediate(s)
         else:
@@ -2866,6 +2946,29 @@ class SponsorMainWindow(QMainWindow):
         left.addWidget(lang_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
+        self._add_settings_group(left, "settings.currency.title", "settings.currency.blurb")
+        cur_card = _make_settings_group_card(card_parent)
+        cur_l = QVBoxLayout(cur_card)
+        cur_l.setContentsMargins(14, 12, 14, 12)
+        cur_l.setSpacing(8)
+        self._display_currency_combo = QComboBox()
+        for _code, lk in (
+            ("jpy", "settings.currency.jpy"),
+            ("twd", "settings.currency.twd"),
+            ("usd", "settings.currency.usd"),
+        ):
+            self._display_currency_combo.addItem(tr(lk), _code)
+        _dcc0 = display_currency_code(self.config)
+        with QSignalBlocker(self._display_currency_combo):
+            for _i in range(self._display_currency_combo.count()):
+                if self._display_currency_combo.itemData(_i) == _dcc0:
+                    self._display_currency_combo.setCurrentIndex(_i)
+                    break
+        self._display_currency_combo.currentIndexChanged.connect(self._on_display_currency_changed)
+        cur_l.addWidget(self._display_currency_combo)
+        left.addWidget(cur_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
+
         self._add_settings_group(left, "settings.group.tray")
         tray_card = _make_settings_group_card(card_parent)
         tl = QVBoxLayout(tray_card)
@@ -3073,6 +3176,22 @@ class SponsorMainWindow(QMainWindow):
         ex_l.addWidget(self._btn_export_csv)
         left.addWidget(export_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(left, "settings.group.purge", "settings.purge.blurb")
+        purge_card = _make_settings_group_card(card_parent)
+        pr = QVBoxLayout(purge_card)
+        pr.setContentsMargins(14, 12, 14, 12)
+        pr.setSpacing(10)
+        self._purge_btn = QPushButton(tr("settings.purge.btn"))
+        self._purge_btn.setStyleSheet(
+            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
+            f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
+        )
+        self._purge_btn.clicked.connect(self._master_clear_login_and_history)
+        pr.addWidget(self._purge_btn)
+        left.addWidget(purge_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
+
         self._refresh_schedule_button_and_status()
         self._refresh_sched_summary_line()
 
@@ -3176,21 +3295,6 @@ class SponsorMainWindow(QMainWindow):
             for key in ("patreon", "fanbox", "fantia"):
                 getattr(self, f"{key}_btn").setEnabled(False)
                 getattr(self, f"{key}_logout_btn").setEnabled(False)
-
-        self._add_settings_group(right, "settings.group.purge", "settings.purge.blurb")
-        purge_card = _make_settings_group_card(card_parent)
-        pr = QVBoxLayout(purge_card)
-        pr.setContentsMargins(14, 12, 14, 12)
-        pr.setSpacing(10)
-        self._purge_btn = QPushButton(tr("settings.purge.btn"))
-        self._purge_btn.setStyleSheet(
-            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
-            f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
-        )
-        self._purge_btn.clicked.connect(self._master_clear_login_and_history)
-        pr.addWidget(self._purge_btn)
-        right.addWidget(purge_card)
-        right.addSpacing(_SETTINGS_SECTION_VGAP)
 
         left.addStretch(1)
         right.addStretch(1)

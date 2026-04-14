@@ -53,6 +53,7 @@ a = Analysis(
         "src.database",
         "src.jst",
         "src.exchange",
+        "src.currency_ui",
         "src.qt_app",
         "src.qt_app.application",
         "src.qt_app.shared",

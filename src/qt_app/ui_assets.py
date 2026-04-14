@@ -14,6 +14,9 @@ _SVG_ACCOUNT = b"""<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24
 
 _SVG_MINI_DASH = b"""<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M4 18V6l4 8 4-10 4 8 4-6v14H4z" stroke="url(#g)" stroke-width="1.75" stroke-linejoin="round" fill="none"/><defs><linearGradient id="g" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#5AC8FA"/><stop offset="1" stop-color="#0A84FF"/></linearGradient></defs></svg>"""
 
+# High-contrast chart glyph for accent / filled header buttons (white on colored bg).
+_SVG_MINI_DASH_ON_ACCENT = b"""<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 18V6l4 8 4-10 4 8 4-6v14H4z" stroke="#ffffff" stroke-width="2" stroke-linejoin="round" fill="rgba(255,255,255,0.18)"/></svg>"""
+
 _SVG_ARROW_UP_RIGHT = b"""<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7"/><path d="M7 7h10v10"/></svg>"""
 
 # Map-pin style (always-on-top toggle).
@@ -56,6 +59,16 @@ def compact_pin_icon(*, size: int = 15, color: str = "#8e8e93") -> QIcon:
 def mini_dashboard_icon() -> QIcon:
     renderer = QSvgRenderer(QByteArray(_SVG_MINI_DASH))
     pix = QPixmap(22, 22)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    renderer.render(p)
+    p.end()
+    return QIcon(pix)
+
+
+def mini_dashboard_icon_on_accent(*, size: int = 24) -> QIcon:
+    renderer = QSvgRenderer(QByteArray(_SVG_MINI_DASH_ON_ACCENT))
+    pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     p = QPainter(pix)
     renderer.render(p)
