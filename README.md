@@ -76,7 +76,7 @@ A **portable Windows** tool for creators to monitor **combined sponsorship incom
 
 - **取得とログイン**：各プラットフォームの認証情報（Cookie / セッション）。ブラウザログインは **Playwright Chromium** が必要です。
 - **ダッシュボード**：合計・支援者数・週次比・前日比・プラットフォーム別・推移グラフ（月／年）。
-- **スケジュール更新**：15 分～4 時間閔隔。増加検知時の通知音、**Discord** への投稿、毎日定時のサマリーに対応。
+- **スケジュール更新**：15 分～4 時間間隔。増加検知時の通知音、**Discord** への投稿、毎日定時のサマリーに対応。
 - **表示言語**：**繁体字中国語 / 英語 / 日本語**（自動または設定で変更）。
 - **更新**：**ポータブル exe** では GitHub の **最新 Release に添付された zip**（`SponsorTracker.exe` と `_internal` を含む）から **ワンクリック更新** できます。`config.yaml` と DB は保持されます。
 
