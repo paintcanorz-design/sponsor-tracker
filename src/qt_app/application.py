@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import math
 import subprocess
 import sys
 import threading
@@ -13,10 +14,12 @@ from pathlib import Path
 from PySide6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QValueAxis
 from PySide6.QtCore import (
     QEvent,
+    QObject,
     QPoint,
     QRect,
     QDateTime,
     QMargins,
+    QSize,
     Qt,
     QSignalBlocker,
     QTimer,
@@ -29,18 +32,23 @@ from PySide6.QtGui import (
     QCloseEvent,
     QDesktopServices,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
+    QMouseEvent,
     QPainter,
     QColor,
     QPalette,
     QPen,
     QPixmap,
+    QShowEvent,
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -56,21 +64,25 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSystemTrayIcon,
     QMenu,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QLayout,
+    QGraphicsDropShadowEffect,
 )
 
 from src.paths import project_root
-from src.jst import month_start_jst_str, now_jst, today_jst_str, year_start_jst_str
+from src.jst import date_days_ago_jst, now_jst, today_jst_str
 from src.database import (
     clear_sponsorship_data,
+    export_daily_summary_csv,
     get_chart_combined_daily_between,
+    get_chart_combined_monthly_peaks_last12,
+    get_total_vs_days_ago,
     init_db,
     save_record,
     update_daily_summary,
     get_dashboard_stats,
-    get_period_comparison,
 )
 from src.fetchers.patreon_fetcher import PatreonFetcher
 from src.fetchers.fanbox_fetcher import FanboxFetcher
@@ -115,6 +127,14 @@ from src.i18n import (
     system_language_guess,
     tr,
 )
+from src.qt_app.ui_assets import (
+    compact_open_main_icon,
+    compact_pin_icon,
+    mini_dashboard_icon,
+    nav_account_icon,
+    nav_overview_icon,
+    nav_settings_icon,
+)
 from src.qt_app.shared import (
     FONT_FALLBACKS,
     PALETTE,
@@ -126,6 +146,11 @@ from src.qt_app.shared import (
     save_config,
     normalize_increase_sound_key,
 )
+
+_PLATFORM_ORDER: tuple[str, ...] = ("patreon", "fanbox", "fantia")
+
+# Vertical gap after each settings / account section card (headline sits above the card).
+_SETTINGS_SECTION_VGAP = 24
 
 
 def _app_icon_path() -> Path | None:
@@ -202,6 +227,8 @@ def _app_stylesheet() -> str:
     QWidget#centralRoot {{ background-color: {c["bg"]}; }}
     QWidget#pageDash {{ background-color: {c["bg"]}; }}
     QWidget#pageSettings {{ background-color: {c["bg_grouped"]}; }}
+    QWidget#pagePrefs {{ background-color: {c["bg_grouped"]}; }}
+    QWidget#pageAccount {{ background-color: {c["bg_grouped"]}; }}
     QWidget#scrollContent {{ background-color: transparent; }}
     QLabel {{ color: {c["text"]} !important; }}
     QToolTip {{
@@ -262,8 +289,15 @@ def _app_stylesheet() -> str:
         font-size: 12px; letter-spacing: 0.1px;
     }}
     QFrame#headerSegment {{
-        background-color: {c["segment_bg"]};
-        border-radius: 10px; border: none;
+        background-color: {c["bg_elevated"]};
+        border-radius: 12px;
+        border: 1px solid {c["border_light"]};
+    }}
+    QFrame#headerSep {{
+        background-color: {c["hairline"]};
+        border: none;
+        max-width: 1px;
+        min-width: 1px;
     }}
     QPushButton#headerPill {{
         background-color: transparent;
@@ -275,6 +309,77 @@ def _app_stylesheet() -> str:
         background-color: {c["segment_hover"]};
     }}
     QPushButton#headerPill:pressed {{
+        background-color: {c["border_light"]};
+    }}
+
+    QFrame#navTabBar {{
+        background-color: {c["segment_bg"]};
+        border-radius: 10px;
+        border: none;
+    }}
+    QPushButton#navTab {{
+        background-color: transparent;
+        border: none;
+        border-radius: 8px;
+        color: {c["text_secondary"]};
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 14px;
+        text-align: left;
+    }}
+    QPushButton#navTab:hover {{
+        background-color: {c["segment_hover"]};
+        color: {c["text"]};
+    }}
+    QPushButton#navTab:checked {{
+        background-color: {c["accent"]};
+        color: #ffffff;
+    }}
+    QPushButton#navTab:checked:hover {{
+        background-color: {c["accent_hover"]};
+        color: #ffffff;
+    }}
+
+    QLabel#pinLabel {{
+        color: {c["text_tertiary"]} !important;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+    }}
+    QCheckBox#pinSwitch {{
+        spacing: 0px;
+    }}
+    QCheckBox#pinSwitch::indicator {{
+        width: 44px;
+        height: 26px;
+        border-radius: 13px;
+        background-color: {c["border_light"]};
+        border: none;
+    }}
+    QCheckBox#pinSwitch::indicator:checked {{
+        background-color: {c["accent"]};
+    }}
+    QCheckBox#pinSwitch::indicator:hover {{
+        background-color: {c["border"]};
+    }}
+    QCheckBox#pinSwitch::indicator:checked:hover {{
+        background-color: {c["accent_hover"]};
+    }}
+
+    QPushButton#headerMiniPill {{
+        background-color: {c["segment_bg"]};
+        color: {c["text"]};
+        border: none;
+        border-radius: 10px;
+        padding: 0px 12px;
+        min-height: 34px;
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QPushButton#headerMiniPill:hover {{
+        background-color: {c["segment_hover"]};
+    }}
+    QPushButton#headerMiniPill:pressed {{
         background-color: {c["border_light"]};
     }}
 
@@ -471,16 +576,41 @@ def _compact_window_stylesheet() -> str:
     c = PALETTE
     return f"""
     QWidget#compactRoot {{
-        background-color: transparent;
+        background-color: {c["bg_grouped"]};
+        border: none;
+        border-radius: 18px;
+    }}
+    QFrame#compactOuter {{
+        background-color: {c["bg_grouped"]};
+        border: 1px solid {c["hairline"]};
+        border-radius: 15px;
+    }}
+    QFrame#compactInner {{
+        background-color: {c["bg_card"]};
+        border: none;
+        border-radius: 12px;
     }}
     QWidget#compactPanel {{
-        background-color: {c["bg_card"]};
-        border: 1px solid {c["border_light"]};
-        border-radius: 12px;
+        background-color: transparent;
+        border: none;
     }}
     QLabel {{
         color: {c["text"]} !important;
         background: transparent;
+    }}
+    QToolButton#compactPinBtn {{
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        padding: 1px;
+        min-width: 22px;
+        min-height: 22px;
+    }}
+    QToolButton#compactPinBtn:hover {{
+        background-color: {c["segment_hover"]};
+    }}
+    QToolButton#compactPinBtn:checked {{
+        background-color: {c["accent_soft"]};
     }}
     QToolButton#compactTool {{
         background-color: transparent;
@@ -507,6 +637,17 @@ def _compact_window_stylesheet() -> str:
     }}
     QToolButton#compactToolAccent:hover {{
         background-color: {c["bg_card_hover"]};
+    }}
+    QToolButton#compactChromeBtn {{
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        padding: 1px;
+        min-width: 22px;
+        min-height: 22px;
+    }}
+    QToolButton#compactChromeBtn:hover {{
+        background-color: {c["segment_hover"]};
     }}
     """
 
@@ -548,15 +689,31 @@ def _tray_icon_pixmap() -> QPixmap:
 
 
 class CompactFloatWindow(QWidget):
-    """迷你�表：一般 Tool 視窗 + 系統標題列（由 OS ��理 DPI／拖曳／��放）。"""
+    """Mini dashboard: native surface + frameless chrome; drag client area; arrow opens main."""
 
     _PLAT_NAMES = {"patreon": "Patreon", "fanbox": "Fanbox", "fantia": "Fantia"}
 
     def __init__(self, app: SponsorMainWindow):
-        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(
+            None,
+            # Tool: no taskbar button. Frameless: no system caption bar. Stays on top optional.
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
         self._app = app
+        self._compact_drag_start: QPoint | None = None
+        self._compact_win_start = QPoint()
+        self._compact_dpi_signals_hooked = False
+        self._compact_move_shrink_timer = QTimer(self)
+        self._compact_move_shrink_timer.setSingleShot(True)
+        self._compact_move_shrink_timer.setInterval(80)
+        self._compact_move_shrink_timer.timeout.connect(self._shrink_compact_window)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setWindowTitle(tr("app.title_compact"))
-        self.setMinimumWidth(260)
+        self.setMinimumWidth(320)
+        self.setMaximumWidth(16777215)
+        self.setMaximumHeight(16777215)
         self.setStyleSheet(_compact_window_stylesheet())
         self.setToolTip(tr("compact.tooltip"))
 
@@ -567,40 +724,81 @@ class CompactFloatWindow(QWidget):
 
         self.setObjectName("compactRoot")
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(0)
         root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
 
+        outer = QFrame()
+        outer.setObjectName("compactOuter")
+        outer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        _sh = QGraphicsDropShadowEffect(outer)
+        _sh.setBlurRadius(18)
+        _sh.setColor(QColor(0, 0, 0, 38))
+        _sh.setOffset(0, 3)
+        outer.setGraphicsEffect(_sh)
+        ol = QVBoxLayout(outer)
+        ol.setContentsMargins(2, 2, 2, 2)
+        ol.setSpacing(0)
+
+        inner = QFrame()
+        inner.setObjectName("compactInner")
+        inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        il = QVBoxLayout(inner)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(0)
+
         panel = QWidget()
+        self._compact_panel = panel
         panel.setObjectName("compactPanel")
-        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         panel.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         panel.customContextMenuRequested.connect(lambda p: self._show_compact_menu(panel, p))
         pl = QVBoxLayout(panel)
-        pl.setContentsMargins(10, 8, 10, 6)
-        pl.setSpacing(0)
+        pl.setContentsMargins(14, 10, 14, 12)
+        pl.setSpacing(6)
 
         row_total = QHBoxLayout()
         row_total.setSpacing(6)
-        hl = QHBoxLayout()
-        hl.setSpacing(5)
-        self._total_lbl = QLabel("\u00a5\u2014")
-        self._total_lbl.setFont(_qf(18, True))
+        self._total_lbl = QLabel("\u00a50")
+        self._total_lbl.setFont(_qf(16, True))
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
-        self._total_lbl.setMinimumHeight(0)
-        self._total_lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        hl.addWidget(self._total_lbl)
+        row_total.addWidget(self._total_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        row_total.addStretch(1)
+        self._patrons_lbl = QLabel("")
+        self._patrons_lbl.setFont(_qf(13, False))
+        self._patrons_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
+        self._patrons_lbl.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        row_total.addWidget(self._patrons_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._inc_arrow_lbl = QLabel("")
         self._inc_arrow_lbl.setFont(_qf(11, True))
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
-        hl.addWidget(self._inc_arrow_lbl)
-        hl.addStretch()
-        row_total.addLayout(hl, 1)
-        self._patron_lbl = QLabel("")
-        self._patron_lbl.setFont(_qf(11))
-        self._patron_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
-        self._patron_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row_total.addWidget(self._patron_lbl)
+        row_total.addWidget(self._inc_arrow_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._btn_compact_pin = QToolButton()
+        self._btn_compact_pin.setObjectName("compactPinBtn")
+        self._btn_compact_pin.setCheckable(True)
+        self._btn_compact_pin.setChecked(
+            bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        )
+        self._btn_compact_pin.setToolTip(tr("header.pin"))
+        self._btn_compact_pin.setAutoRaise(True)
+        self._btn_compact_pin.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_compact_pin.toggled.connect(self._on_topmost_toggled)
+        self._sync_compact_pin_icon()
+        row_total.addWidget(self._btn_compact_pin, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._btn_compact_open_main = QToolButton()
+        self._btn_compact_open_main.setObjectName("compactChromeBtn")
+        _arrow_col = PALETTE["text_tertiary"]
+        self._btn_compact_open_main.setIcon(
+            compact_open_main_icon(size=12, color=_arrow_col)
+        )
+        self._btn_compact_open_main.setIconSize(QSize(12, 12))
+        self._btn_compact_open_main.setToolTip(tr("compact.open_main"))
+        self._btn_compact_open_main.setAutoRaise(True)
+        self._btn_compact_open_main.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn_compact_open_main.clicked.connect(self._expand)
+        row_total.addWidget(self._btn_compact_open_main, 0, Qt.AlignmentFlag.AlignVCenter)
         pl.addLayout(row_total)
 
         self._increase_lbl = QLabel("")
@@ -611,48 +809,19 @@ class CompactFloatWindow(QWidget):
         self._increase_lbl.hide()
         pl.addWidget(self._increase_lbl)
 
-        pl.addSpacing(5)
+        self._plat_host = QWidget()
+        self._plat_grid = QGridLayout(self._plat_host)
+        self._plat_grid.setContentsMargins(0, 4, 0, 0)
+        self._plat_grid.setHorizontalSpacing(14)
+        pl.addWidget(self._plat_host)
 
-        self.sep = QFrame()
-        self.sep.setFixedHeight(1)
-        self.sep.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.sep.setStyleSheet(
-            f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 transparent, stop:0.1 {PALETTE['border_light']},"
-            f"stop:0.9 {PALETTE['border_light']}, stop:1 transparent);"
-            f"border:none; max-height:1px;"
-        )
-        pl.addWidget(self.sep)
-        pl.addSpacing(4)
+        self._plat_amount_min_w = QFontMetrics(_qf(15, True)).horizontalAdvance("\u00a5999,999") + 10
 
-        platform_host = QWidget()
-        platform_host.setMinimumHeight(48)
-        platform_host.setMaximumHeight(72)
-        platform_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        plat_row = QGridLayout(platform_host)
-        plat_row.setContentsMargins(0, 0, 0, 2)
-        plat_row.setHorizontalSpacing(8)
-        plat_row.setVerticalSpacing(0)
-        plat_row.setColumnStretch(0, 1)
-        plat_row.setColumnStretch(1, 1)
-        plat_row.setColumnStretch(2, 1)
-        plat_row.setRowMinimumHeight(0, 44)
-        self._plat_cells: list[QLabel] = []
-        for i in range(3):
-            lbl = QLabel()
-            lbl.setTextFormat(Qt.TextFormat.RichText)
-            lbl.setWordWrap(False)
-            lbl.setMinimumHeight(42)
-            lbl.setMaximumHeight(70)
-            lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            plat_row.addWidget(lbl, 0, i, Qt.AlignmentFlag.AlignTop)
-            self._plat_cells.append(lbl)
-        pl.addWidget(platform_host)
+        il.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
+        ol.addWidget(inner, 0, Qt.AlignmentFlag.AlignTop)
+        root.addWidget(outer, 0, Qt.AlignmentFlag.AlignTop)
 
-        root.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
-
-        for _cw in [panel] + panel.findChildren(QWidget):
+        for _cw in [outer, inner, panel] + outer.findChildren(QWidget):
             _cw.installEventFilter(self)
 
         self._indicator_timer = QTimer(self)
@@ -662,13 +831,37 @@ class CompactFloatWindow(QWidget):
         self.refresh()
         self._shrink_compact_window()
 
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._hook_compact_dpi_signals)
+        QTimer.singleShot(0, self._shrink_compact_window)
+
+    def _hook_compact_dpi_signals(self) -> None:
+        wh = self.windowHandle()
+        if wh is None or self._compact_dpi_signals_hooked:
+            return
+        self._compact_dpi_signals_hooked = True
+        wh.screenChanged.connect(self._on_compact_dpi_environment_changed)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._compact_move_shrink_timer.start()
+
+    def _on_compact_dpi_environment_changed(self, *args: object) -> None:
+        QTimer.singleShot(0, self._shrink_compact_window)
+
     def _shrink_compact_window(self) -> None:
-        """Resize window to layout sizeHint so no empty client area below the card."""
+        """Fit window to content in logical pixels (re-run after screen / DPI changes)."""
+        self.setMaximumWidth(16777215)
+        self.setMaximumHeight(16777215)
         lay = self.layout()
         if lay is not None:
+            lay.invalidate()
             lay.activate()
-        self.adjustSize()
-        QTimer.singleShot(0, self.adjustSize)
+        self.updateGeometry()
+        sh = self.sizeHint()
+        if sh.isValid() and sh.width() > 0 and sh.height() > 0:
+            self.resize(sh)
 
     def closeEvent(self, event: QCloseEvent):
         app = self._app
@@ -682,10 +875,35 @@ class CompactFloatWindow(QWidget):
     def _expand(self):
         self._app._hide_compact()
 
+    def _compact_drag_allowed(self, watched: QObject) -> bool:
+        return watched not in (self._btn_compact_open_main, self._btn_compact_pin)
+
+    def _sync_compact_pin_icon(self) -> None:
+        on = self._btn_compact_pin.isChecked()
+        col = PALETTE["accent"] if on else PALETTE["text_tertiary"]
+        self._btn_compact_pin.setIcon(compact_pin_icon(size=12, color=col))
+        self._btn_compact_pin.setIconSize(QSize(12, 12))
+
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.MouseButtonDblClick:
-            self._expand()
-            return True
+        if isinstance(event, QMouseEvent) and self._compact_drag_allowed(watched):
+            if event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
+                self._expand()
+                return True
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._compact_drag_start = event.globalPosition().toPoint()
+                self._compact_win_start = self.pos()
+                return False
+            if event.type() == QEvent.Type.MouseMove:
+                if (
+                    self._compact_drag_start is not None
+                    and event.buttons() & Qt.MouseButton.LeftButton
+                ):
+                    delta = event.globalPosition().toPoint() - self._compact_drag_start
+                    self.move(self._compact_win_start + delta)
+                return False
+            if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                self._compact_drag_start = None
+                return False
         return super().eventFilter(watched, event)
 
     def _show_compact_menu(self, host: QWidget, pos: QPoint):
@@ -705,19 +923,24 @@ class CompactFloatWindow(QWidget):
 
     def _on_topmost_toggled(self, on: bool):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(on))
+        self._btn_compact_pin.blockSignals(True)
+        self._btn_compact_pin.setChecked(bool(on))
+        self._btn_compact_pin.blockSignals(False)
+        self._sync_compact_pin_icon()
         self.show()
+
+    def _clear_plat_grid(self) -> None:
+        while self._plat_grid.count():
+            item = self._plat_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
     def refresh(self, stats: dict | None = None):
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
+        self._patrons_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
-        self._patron_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
         self._increase_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
-        self.sep.setStyleSheet(
-            f"background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f"stop:0 transparent, stop:0.1 {PALETTE['border_light']},"
-            f"stop:0.9 {PALETTE['border_light']}, stop:1 transparent);"
-            f"border:none; max-height:1px;"
-        )
         if stats is None:
             try:
                 s = get_dashboard_stats()
@@ -725,47 +948,49 @@ class CompactFloatWindow(QWidget):
                 return
         else:
             s = stats
-        total = s.get("total_amount") or 0
-        patrons = s.get("total_patron_count") or 0
+        s = self._app._filter_stats_for_dashboard(s)
+        total = float(s.get("total_amount") or 0)
         self._total_lbl.setText(f"\u00a5{total:,.0f}")
+        patrons = int(s.get("total_patron_count") or 0)
         pp = tr("common.people")
-        self._patron_lbl.setText(f"{patrons} {pp}".strip() if pp else str(patrons))
+        self._patrons_lbl.setText(
+            f"{patrons:,} {pp}".strip() if pp else f"{patrons:,}"
+        )
         rate = float(s.get("fx_usd_jpy") or 150)
         platforms = s.get("by_platform") or []
         tc = PALETTE["text"]
-        tct = PALETTE["text_tertiary"]
-        tcs = PALETTE["text_secondary"]
-        for i, lbl in enumerate(self._plat_cells):
-            if i < len(platforms):
-                p = platforms[i]
-                plat = p.get("platform") or ""
-                amt = float(p.get("amount") or 0)
-                cur = (p.get("currency") or "JPY").upper()
-                if plat == "patreon" and cur == "USD":
-                    amt *= rate
-                color = {
-                    "patreon": PALETTE["patreon"],
-                    "fanbox": PALETTE["fanbox"],
-                    "fantia": PALETTE["fantia"],
-                }.get(plat, PALETTE["accent"])
-                name = self._PLAT_NAMES.get(plat, plat)
-                name_esc = html.escape(name)
-                line1 = (
-                    f"<span style='color:{color}; font-weight:600; font-size:10px; "
-                    f"letter-spacing:0.2px'>\u25cf {name_esc}</span>"
-                )
-                pc_ct = int(p.get("patron_count") or 0)
-                pp3 = tr("common.people")
-                pc_s = f"{pc_ct} {pp3}".strip() if pp3 else str(pc_ct)
-                line2 = (
-                    f"<span style='color:{tc}; font-weight:700; font-size:15px; "
-                    f"letter-spacing:-0.4px'>\u00a5{amt:,.0f}</span>"
-                    f"<span style='color:{tcs}; font-weight:600; font-size:12px'>"
-                    f"&nbsp;&nbsp;{pc_s}</span>"
-                )
-                lbl.setText(line1 + "<br>" + line2)
-            else:
-                lbl.setText(f"<span style='color:{tct}'>\u2014</span>")
+        self._clear_plat_grid()
+        for col, p in enumerate(platforms):
+            plat = str(p.get("platform") or "")
+            amt = float(p.get("amount") or 0)
+            cur = (p.get("currency") or "JPY").upper()
+            if plat == "patreon" and cur == "USD":
+                amt *= rate
+            color = {
+                "patreon": PALETTE["patreon"],
+                "fanbox": PALETTE["fanbox"],
+                "fantia": PALETTE["fantia"],
+            }.get(plat, PALETTE["accent"])
+            name = self._PLAT_NAMES.get(plat, plat)
+            name_esc = html.escape(name)
+            line1 = (
+                f"<span style='color:{color}; font-weight:600; font-size:11px; "
+                f"letter-spacing:0.2px'>\u25cf {name_esc}</span>"
+            )
+            line2 = (
+                f"<span style='color:{tc}; font-weight:700; font-size:15px; "
+                f"letter-spacing:-0.35px'>\u00a5{amt:,.0f}</span>"
+            )
+            lbl = QLabel()
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setWordWrap(True)
+            lbl.setMinimumHeight(30)
+            lbl.setMinimumWidth(self._plat_amount_min_w)
+            lbl.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            lbl.setText(line1 + "<br>" + line2)
+            self._plat_grid.addWidget(lbl, 0, col, Qt.AlignmentFlag.AlignTop)
+            self._plat_grid.setColumnStretch(col, 1)
         inc_this = getattr(self._app, "_last_update_increase", None) or 0
         if inc_this > 0:
             self._increase_lbl.setText(f"\u25b2 +\u00a5{inc_this:,.0f}")
@@ -822,7 +1047,10 @@ class SponsorMainWindow(QMainWindow):
         self._login_flow_active = {"patreon": False, "fanbox": False, "fantia": False}
         self._browser_login_generation = {"patreon": 0, "fanbox": 0, "fantia": 0}
         self._stack: QStackedWidget | None = None
-        self._btn_settings_nav: QPushButton | None = None
+        self._nav_group: QButtonGroup | None = None
+        self._nav_btns: list[QPushButton] = []
+        self._pin_switch: QCheckBox | None = None
+        self._pin_label: QLabel | None = None
         self._compact_win: CompactFloatWindow | None = None
         self._is_topmost = False
         self._schedule_running = False
@@ -931,8 +1159,10 @@ class SponsorMainWindow(QMainWindow):
             return
         if self._stack is not None and self._stack.currentIndex() != 0:
             self._stack.setCurrentIndex(0)
-            if self._btn_settings_nav is not None:
-                self._btn_settings_nav.setText(tr("header.settings"))
+            if self._nav_btns and self._nav_group is not None:
+                self._nav_group.blockSignals(True)
+                self._nav_btns[0].setChecked(True)
+                self._nav_group.blockSignals(False)
         self.showNormal()
         self.raise_()
         self.activateWindow()
@@ -967,7 +1197,7 @@ class SponsorMainWindow(QMainWindow):
 
     def _copy_dashboard_total_to_clipboard(self):
         try:
-            s = get_dashboard_stats()
+            s = self._filter_stats_for_dashboard(get_dashboard_stats())
             total = float(s.get("total_amount") or 0)
             text = f"\u00a5{total:,.0f}"
         except Exception:
@@ -1040,27 +1270,59 @@ class SponsorMainWindow(QMainWindow):
         title_block.addWidget(t1)
         title_block.addWidget(t2)
         hl.addLayout(title_block)
-        hl.addStretch()
+        hl.addStretch(1)
         seg = QFrame()
         seg.setObjectName("headerSegment")
         seg.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         seg_l = QHBoxLayout(seg)
-        seg_l.setContentsMargins(4, 4, 4, 4)
-        seg_l.setSpacing(3)
-        self._pin_btn = QPushButton(tr("header.pin"))
-        self._pin_btn.setObjectName("headerPill")
-        self._pin_btn.clicked.connect(self._toggle_topmost)
-        seg_l.addWidget(self._pin_btn)
+        seg_l.setContentsMargins(10, 5, 6, 5)
+        seg_l.setSpacing(10)
+        self._pin_label = QLabel(tr("header.pin"))
+        self._pin_label.setObjectName("pinLabel")
+        seg_l.addWidget(self._pin_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._pin_switch = QCheckBox()
+        self._pin_switch.setObjectName("pinSwitch")
+        self._pin_switch.toggled.connect(self._on_pin_switch_toggled)
+        seg_l.addWidget(self._pin_switch, 0, Qt.AlignmentFlag.AlignVCenter)
+        _sep_h = QFrame()
+        _sep_h.setObjectName("headerSep")
+        _sep_h.setFixedHeight(22)
+        seg_l.addWidget(_sep_h, 0, Qt.AlignmentFlag.AlignVCenter)
         self._btn_header_mini = QPushButton(tr("header.mini"))
-        self._btn_header_mini.setObjectName("headerPill")
+        self._btn_header_mini.setObjectName("headerMiniPill")
+        self._btn_header_mini.setIcon(mini_dashboard_icon())
+        self._btn_header_mini.setIconSize(QSize(18, 18))
+        self._btn_header_mini.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self._btn_header_mini.setToolTip(tr("header.mini"))
         self._btn_header_mini.clicked.connect(self._show_compact)
         seg_l.addWidget(self._btn_header_mini)
-        self._btn_settings_nav = QPushButton(tr("header.settings"))
-        self._btn_settings_nav.setObjectName("headerPill")
-        self._btn_settings_nav.clicked.connect(self._toggle_settings_view)
-        seg_l.addWidget(self._btn_settings_nav)
-        hl.addWidget(seg)
+        hl.addWidget(seg, 0, Qt.AlignmentFlag.AlignVCenter)
+        nav_bar = QFrame()
+        nav_bar.setObjectName("navTabBar")
+        nav_bar.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        nav_l = QHBoxLayout(nav_bar)
+        nav_l.setContentsMargins(4, 4, 4, 4)
+        nav_l.setSpacing(2)
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        self._nav_btns = []
+        for nid, tkey, ico in (
+            (0, "nav.tab.overview", nav_overview_icon()),
+            (1, "nav.tab.settings", nav_settings_icon()),
+            (2, "nav.tab.account", nav_account_icon()),
+        ):
+            b = QPushButton(tr(tkey))
+            b.setIcon(ico)
+            b.setIconSize(QSize(18, 18))
+            b.setObjectName("navTab")
+            b.setCheckable(True)
+            self._nav_group.addButton(b, nid)
+            nav_l.addWidget(b)
+            self._nav_btns.append(b)
+        self._nav_group.idClicked.connect(self._on_main_nav)
+        hl.addWidget(nav_bar, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header)
+        self._nav_btns[0].setChecked(True)
 
         self._stack = QStackedWidget()
         self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -1115,11 +1377,29 @@ class SponsorMainWindow(QMainWindow):
 
         bl.addStretch(1)
 
-        page_set = QWidget()
-        page_set.setObjectName("pageSettings")
-        page_set.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        page_set.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        psl = QVBoxLayout(page_set)
+        page_prefs, inner_p, lp, rp = self._make_settings_scroll_page("pagePrefs")
+        self._build_prefs_scroll_content(lp, rp, inner_p)
+        page_account, inner_a, la, ra = self._make_settings_scroll_page("pageAccount")
+        self._build_account_scroll_content(la, ra, inner_a)
+
+        self._stack.addWidget(page_dash)
+        self._stack.addWidget(page_prefs)
+        self._stack.addWidget(page_account)
+        root.addWidget(self._stack, 1)
+
+        self._init_dashboard_layout()
+        self._bootstrap_dashboard_sync()
+        self._refresh_dashboard()
+        self._stack.setCurrentIndex(0)
+
+    def _make_settings_scroll_page(
+        self, object_name: str
+    ) -> tuple[QWidget, QWidget, QVBoxLayout, QVBoxLayout]:
+        page = QWidget()
+        page.setObjectName(object_name)
+        page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        psl = QVBoxLayout(page)
         psl.setContentsMargins(16, 10, 16, 10)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1130,7 +1410,6 @@ class SponsorMainWindow(QMainWindow):
         content.setObjectName("scrollContent")
         content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         content.setMinimumSize(0, 0)
-        self._settings_inner = content
         content.setMinimumWidth(640)
         sl = QVBoxLayout(content)
         sl.setSpacing(6)
@@ -1144,30 +1423,45 @@ class SponsorMainWindow(QMainWindow):
         settings_row.addLayout(left_col, 1)
         settings_row.addLayout(right_col, 1)
         sl.addLayout(settings_row, 1)
-        self._build_settings_scroll_content(left_col, right_col)
         scroll.setWidget(content)
         psl.addWidget(scroll, 1)
+        return page, content, left_col, right_col
 
-        self._stack.addWidget(page_dash)
-        self._stack.addWidget(page_set)
-        root.addWidget(self._stack, 1)
+    def _on_main_nav(self, page_id: int) -> None:
+        if self._stack is None:
+            return
+        self._stack.setCurrentIndex(int(page_id))
 
-        self._init_dashboard_layout()
-        self._bootstrap_dashboard_sync()
-        self._refresh_dashboard()
-        self._stack.setCurrentIndex(0)
-
-    def _toggle_topmost(self):
-        self._is_topmost = not self._is_topmost
+    def _on_pin_switch_toggled(self, on: bool) -> None:
+        self._is_topmost = bool(on)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self._is_topmost)
         self.show()
-        if self._is_topmost:
-            self._pin_btn.setStyleSheet(
-                f"background-color: {PALETTE['accent']}; color: #ffffff; border: none; "
-                f"border-radius: 8px; font-weight: 600;"
+        if hasattr(self, "_act_top") and self._act_top is not None:
+            with QSignalBlocker(self._act_top):
+                self._act_top.setChecked(self._is_topmost)
+
+    def _refresh_sched_summary_line(self) -> None:
+        if not hasattr(self, "_sched_summary_lbl"):
+            return
+        try:
+            s = self._filter_stats_for_dashboard(get_dashboard_stats())
+            total = float(s.get("total_amount") or 0)
+            patrons = int(s.get("total_patron_count") or 0)
+            t = (self._last_update_time_jst or "").strip()
+            if not t:
+                self._sched_summary_lbl.setText(tr("settings.sched.summary_none"))
+                return
+            self._sched_summary_lbl.setText(
+                tr("settings.sched.summary", t=t, total=total, patrons=patrons)
             )
+        except Exception:
+            self._sched_summary_lbl.setText(tr("settings.sched.summary_none"))
+
+    def _toggle_topmost(self):
+        if self._pin_switch is not None:
+            self._pin_switch.setChecked(not self._pin_switch.isChecked())
         else:
-            self._pin_btn.setStyleSheet("")
+            self._on_pin_switch_toggled(not self._is_topmost)
 
     def _show_compact(self):
         if self._compact_win and self._compact_win.isVisible():
@@ -1186,16 +1480,6 @@ class SponsorMainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
-
-    def _toggle_settings_view(self):
-        if self._stack is None or self._btn_settings_nav is None:
-            return
-        if self._stack.currentIndex() == 0:
-            self._stack.setCurrentIndex(1)
-            self._btn_settings_nav.setText(tr("nav.back_dash"))
-        else:
-            self._stack.setCurrentIndex(0)
-            self._btn_settings_nav.setText(tr("header.settings"))
 
     def _refresh_platform_login_labels(self) -> None:
         for key in ("patreon", "fanbox", "fantia"):
@@ -1293,6 +1577,7 @@ class SponsorMainWindow(QMainWindow):
             )
             self.update_status.setText(tr("settings.sched.stopped"))
             self.update_status.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
+        self._refresh_sched_summary_line()
 
     def _apply_full_retranslate(self) -> None:
         self.setWindowTitle(tr("app.title"))
@@ -1300,14 +1585,19 @@ class SponsorMainWindow(QMainWindow):
             self._w_app_title.setText(tr("app.title"))
         if self._w_app_subtitle:
             self._w_app_subtitle.setText(tr("app.subtitle"))
-        self._pin_btn.setText(tr("header.pin"))
+        if self._pin_label is not None:
+            self._pin_label.setText(tr("header.pin"))
         if hasattr(self, "_btn_header_mini"):
             self._btn_header_mini.setText(tr("header.mini"))
-        if self._stack and self._btn_settings_nav:
-            if self._stack.currentIndex() == 0:
-                self._btn_settings_nav.setText(tr("header.settings"))
-            else:
-                self._btn_settings_nav.setText(tr("nav.back_dash"))
+            self._btn_header_mini.setToolTip(tr("header.mini"))
+        if self._nav_btns:
+            _nav_keys = ("nav.tab.overview", "nav.tab.settings", "nav.tab.account")
+            _icons = (nav_overview_icon(), nav_settings_icon(), nav_account_icon())
+            for b, nk, ico in zip(self._nav_btns, _nav_keys, _icons):
+                b.setText(tr(nk))
+                b.setIcon(ico)
+        if hasattr(self, "_fetch_hint_lbl"):
+            self._fetch_hint_lbl.setText(tr("settings.fetch.hint"))
         if self._w_dash_headline:
             self._w_dash_headline.setText(tr("dash.overview"))
         if self._w_plat_section:
@@ -1318,8 +1608,8 @@ class SponsorMainWindow(QMainWindow):
             sel = self._trend_range_combo.currentData()
             with QSignalBlocker(self._trend_range_combo):
                 self._trend_range_combo.clear()
-                self._trend_range_combo.addItem(tr("dash.month"), "month")
-                self._trend_range_combo.addItem(tr("dash.year"), "year")
+                self._trend_range_combo.addItem(tr("dash.month"), "30d")
+                self._trend_range_combo.addItem(tr("dash.year"), "12m")
                 for i in range(self._trend_range_combo.count()):
                     if self._trend_range_combo.itemData(i) == sel:
                         self._trend_range_combo.setCurrentIndex(i)
@@ -1340,6 +1630,10 @@ class SponsorMainWindow(QMainWindow):
         if cw is not None:
             cw.setWindowTitle(tr("app.title_compact"))
             cw.setToolTip(tr("compact.tooltip"))
+            if hasattr(cw, "_btn_compact_open_main"):
+                cw._btn_compact_open_main.setToolTip(tr("compact.open_main"))
+            if hasattr(cw, "_btn_compact_pin"):
+                cw._btn_compact_pin.setToolTip(tr("header.pin"))
             cw.refresh()
         for lbl, key in self._settings_i18n_headings:
             lbl.setText(tr(key))
@@ -1383,6 +1677,16 @@ class SponsorMainWindow(QMainWindow):
             self._app_oneclick_btn.setText(tr("settings.update.oneclick"))
             if not lazy_update_supported():
                 self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
+        if hasattr(self, "_btn_github_repo"):
+            self._btn_github_repo.setText(tr("settings.version.github"))
+            _repo = (configured_github_repo() or "").strip()
+            _ok_repo = bool(_repo) and _repo.count("/") == 1
+            self._btn_github_repo.setEnabled(_ok_repo)
+            self._btn_github_repo.setToolTip(
+                "" if _ok_repo else tr("settings.version.github_tip")
+            )
+        if hasattr(self, "_btn_export_csv"):
+            self._btn_export_csv.setText(tr("settings.export.btn"))
         for key in ("patreon", "fanbox", "fantia"):
             if hasattr(self, f"{key}_btn"):
                 getattr(self, f"{key}_btn").setText(tr("settings.login"))
@@ -1414,6 +1718,62 @@ class SponsorMainWindow(QMainWindow):
             self._last_update_lbl.setText(tr("dash.updated", t=self._last_update_time_jst))
         self._refresh_platform_login_labels()
         self._refresh_dashboard()
+        for _pk in _PLATFORM_ORDER:
+            _attr = f"_sw_plat_vis_{_pk}"
+            if hasattr(self, _attr):
+                getattr(self, _attr).setText(tr("settings.platform.show_overview"))
+
+    def _platform_visibility(self) -> dict[str, bool]:
+        gui = (self.config or {}).get("gui") or {}
+        raw = gui.get("show_platforms") or {}
+        return {k: True if raw.get(k) is None else bool(raw.get(k)) for k in _PLATFORM_ORDER}
+
+    def _filter_stats_for_dashboard(self, s: dict) -> dict:
+        vis = self._platform_visibility()
+        by_in = {str(p.get("platform")): p for p in (s.get("by_platform") or [])}
+        rate = float(s.get("fx_usd_jpy") or 150)
+        filtered: list[dict] = []
+        total_amt = 0.0
+        total_pat = 0
+        for key in _PLATFORM_ORDER:
+            if not vis.get(key, True):
+                continue
+            p = by_in.get(key)
+            if p is None:
+                filtered.append(
+                    {
+                        "platform": key,
+                        "amount": 0.0,
+                        "patron_count": 0,
+                        "change_amount": None,
+                        "change_percent": None,
+                        "currency": "JPY",
+                        "last_updated": None,
+                    }
+                )
+            else:
+                filtered.append(dict(p))
+                amt = float(p.get("amount") or 0)
+                cur = (p.get("currency") or "JPY").upper()
+                if key == "patreon" and cur == "USD":
+                    amt *= rate
+                total_amt += amt
+                total_pat += int(p.get("patron_count") or 0)
+        out = dict(s)
+        out["by_platform"] = filtered
+        out["total_amount"] = total_amt
+        out["total_patron_count"] = total_pat
+        return out
+
+    def _on_platform_visibility_toggled(self, key: str, on: bool) -> None:
+        self.config = load_config()
+        self.config.setdefault("gui", {}).setdefault("show_platforms", {})
+        self.config["gui"]["show_platforms"][key] = bool(on)
+        save_config(self.config)
+        self._refresh_dashboard()
+        self._refresh_sched_summary_line()
+        if self._compact_win is not None and self._compact_win.isVisible():
+            self._compact_win.refresh()
 
     # --- dashboard ---
     def _init_dashboard_layout(self):
@@ -1530,8 +1890,8 @@ class SponsorMainWindow(QMainWindow):
         title_col.addWidget(trend_title)
         hdr.addLayout(title_col, 1)
         self._trend_range_combo = QComboBox()
-        self._trend_range_combo.addItem(tr("dash.month"), "month")
-        self._trend_range_combo.addItem(tr("dash.year"), "year")
+        self._trend_range_combo.addItem(tr("dash.month"), "30d")
+        self._trend_range_combo.addItem(tr("dash.year"), "12m")
         self._trend_range_combo.currentIndexChanged.connect(lambda _i: self._refresh_trend_chart())
         hdr.addWidget(self._trend_range_combo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
         parent_layout.addLayout(hdr)
@@ -1560,13 +1920,20 @@ class SponsorMainWindow(QMainWindow):
             return
         chart.setTheme(QChart.ChartTheme.ChartThemeDark)
         combo = getattr(self, "_trend_range_combo", None)
-        mode = combo.currentData() if combo is not None else "month"
-        if mode not in ("month", "year"):
-            mode = "month"
+        mode = combo.currentData() if combo is not None else "30d"
+        if mode not in ("30d", "12m", "month", "year"):
+            mode = "30d"
+        if mode in ("month",):
+            mode = "30d"
+        if mode in ("year",):
+            mode = "12m"
         end = today_jst_str()
-        start = year_start_jst_str() if mode == "year" else month_start_jst_str()
         try:
-            data = get_chart_combined_daily_between(start, end)
+            if mode == "30d":
+                start = date_days_ago_jst(29)
+                data = get_chart_combined_daily_between(start, end)
+            else:
+                data = get_chart_combined_monthly_peaks_last12()
         except Exception:
             data = []
         for s in list(chart.series()):
@@ -1574,35 +1941,51 @@ class SponsorMainWindow(QMainWindow):
         for ax in list(chart.axes()):
             chart.removeAxis(ax)
         series = QLineSeries()
-        for date_str, amt, _ in data:
-            dt = QDateTime.fromString(f"{date_str} 12:00:00", "yyyy-MM-dd HH:mm:ss")
-            if not dt.isValid():
-                continue
-            series.append(float(dt.toMSecsSinceEpoch()), float(amt))
+        if mode == "30d":
+            for date_str, amt, _ in data:
+                dt = QDateTime.fromString(f"{date_str} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+                if not dt.isValid():
+                    continue
+                series.append(float(dt.toMSecsSinceEpoch()), float(amt))
+        else:
+            for date_str, amt in data:
+                dt = QDateTime.fromString(f"{date_str} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+                if not dt.isValid():
+                    continue
+                series.append(float(dt.toMSecsSinceEpoch()), float(amt))
         pen = QPen(QColor(PALETTE["accent"]))
         pen.setWidthF(2.5)
         series.setPen(pen)
         chart.addSeries(series)
         axis_x = QDateTimeAxis()
-        axis_x.setFormat("M/d" if mode == "month" else "M/d")
+        axis_x.setFormat("M/d" if mode == "30d" else "MMM")
         axis_x.setLabelsColor(QColor(PALETTE["text_secondary"]))
         axis_x.setGridLineColor(QColor(PALETTE["hairline"]))
         if data:
-            d0 = QDateTime.fromString(f"{data[0][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
-            d1 = QDateTime.fromString(f"{data[-1][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+            if mode == "30d":
+                d0 = QDateTime.fromString(f"{data[0][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+                d1 = QDateTime.fromString(f"{data[-1][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+            else:
+                d0 = QDateTime.fromString(f"{data[0][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
+                d1 = QDateTime.fromString(f"{data[-1][0]} 12:00:00", "yyyy-MM-dd HH:mm:ss")
             if d0.isValid() and d1.isValid():
                 axis_x.setRange(d0, d1)
         axis_y = QValueAxis()
         axis_y.setLabelsColor(QColor(PALETTE["text_secondary"]))
         axis_y.setGridLineColor(QColor(PALETTE["hairline"]))
+        axis_y.setLabelFormat("%d")
         if data:
             ys = [float(row[1]) for row in data]
             lo, hi = min(ys), max(ys)
             span = max(hi - lo, abs(hi) * 0.02, 500.0)
-            axis_y.setRange(lo - span * 0.08, hi + span * 0.12)
+            pad = max(span * 0.12, 1.0)
+            y_lo = math.floor(lo - pad)
+            y_hi = math.ceil(hi + pad)
+            if y_lo == y_hi:
+                y_hi = y_lo + 1
+            axis_y.setRange(y_lo, y_hi)
         else:
             axis_y.setRange(0, 1)
-        axis_y.setLabelFormat("%.0f")
         chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
         series.attachAxis(axis_x)
@@ -1617,13 +2000,16 @@ class SponsorMainWindow(QMainWindow):
             cv.setBackgroundBrush(QBrush(QColor(bgc)))
             cv.setStyleSheet(f"QChartView {{ background-color: {bgc}; border: none; }}")
         if hasattr(axis_x, "setTickCount"):
-            n = len(data)
-            axis_x.setTickCount(min(12, max(4, min(n, 12) or 4)))
+            if mode == "30d":
+                n = len(data)
+                axis_x.setTickCount(min(12, max(4, min(n, 12) or 4)))
+            else:
+                axis_x.setTickCount(12)
 
     def _bootstrap_dashboard_sync(self) -> None:
         try:
             s = get_dashboard_stats()
-            p = get_period_comparison(7)
+            p = get_total_vs_days_ago(7)
         except Exception:
             s = {
                 "total_amount": 0.0,
@@ -1665,7 +2051,7 @@ class SponsorMainWindow(QMainWindow):
                     s = pending_snap
                 else:
                     s = get_dashboard_stats()
-                period = get_period_comparison(7)
+                period = get_total_vs_days_ago(7)
                 used = pending_snap is not None
                 self._dashboard_data_ready.emit(seq, s, period, used, pending_snap)
             except Exception:
@@ -1678,7 +2064,7 @@ class SponsorMainWindow(QMainWindow):
         self._dashboard_fetch_seq += 1
         self._pending_dashboard_stats = None
         try:
-            period = get_period_comparison(7)
+            period = get_total_vs_days_ago(7)
         except Exception:
             period = None
         self._paint_dashboard_view(s, period)
@@ -1711,6 +2097,7 @@ class SponsorMainWindow(QMainWindow):
             pass
 
     def _paint_dashboard_view(self, s: dict, period: dict | None):
+        s = self._filter_stats_for_dashboard(s)
         pnames, pcolors = self._plat_meta
         h0 = self._hero_cells[0]
         h1 = self._hero_cells[1]
@@ -1764,7 +2151,7 @@ class SponsorMainWindow(QMainWindow):
             else:
                 c2_col = PALETTE["text_tertiary"]
             h2["value"].setStyleSheet(f"color: {c2_col} !important;")
-            h2["sub"].setText(tr("dash.sub.period", n=period["days"]))
+            h2["sub"].setText(tr("dash.sub.vs_week_snapshot", n=period["days"]))
         else:
             h2["value"].setText("\u2014")
             h2["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
@@ -1932,6 +2319,9 @@ class SponsorMainWindow(QMainWindow):
             self._total_before_update = 0
             self._platform_before_amounts = {}
         self.update_btn.setEnabled(False)
+        self.update_btn.setText(tr("settings.fetch.running"))
+        if hasattr(self, "_fetch_hint_lbl"):
+            self._fetch_hint_lbl.setVisible(True)
 
         def do():
             try:
@@ -2011,6 +2401,9 @@ class SponsorMainWindow(QMainWindow):
 
     def _update_done(self, results, from_schedule: bool = False):
         self.update_btn.setEnabled(True)
+        self.update_btn.setText(tr("settings.fetch"))
+        if hasattr(self, "_fetch_hint_lbl"):
+            self._fetch_hint_lbl.setVisible(False)
         self._last_update_time_jst = f"{now_jst():%H:%M}"
         self._last_update_lbl.setText(tr("dash.updated", t=self._last_update_time_jst))
         s = None
@@ -2068,9 +2461,13 @@ class SponsorMainWindow(QMainWindow):
             self._apply_dashboard_ui_immediate(s)
         else:
             self._refresh_dashboard()
+        self._refresh_sched_summary_line()
 
     def _update_fail(self, msg):
         self.update_btn.setEnabled(True)
+        self.update_btn.setText(tr("settings.fetch"))
+        if hasattr(self, "_fetch_hint_lbl"):
+            self._fetch_hint_lbl.setVisible(False)
         QMessageBox.critical(self, tr("update.fail.title"), msg or tr("update.fail.unknown"))
 
     def _msgbox_version_check_new_release(self, latest: str, ver_local: str) -> bool:
@@ -2163,6 +2560,39 @@ class SponsorMainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl(releases_latest_url(repo)))
         else:
             self._msgbox_version_check_uptodate(str(latest), ver_local)
+
+    def _on_open_github_repo_clicked(self) -> None:
+        repo = (configured_github_repo() or "").strip()
+        if not repo or repo.count("/") != 1:
+            return
+        QDesktopServices.openUrl(QUrl(f"https://github.com/{repo}"))
+
+    def _on_export_daily_csv_clicked(self) -> None:
+        default_n = f"sponsor_daily_{today_jst_str().replace('-', '')}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            tr("settings.export.dialog_title"),
+            str(Path.home() / default_n),
+            "CSV (*.csv)",
+        )
+        if not path:
+            return
+        p = Path(path)
+        if p.suffix.lower() != ".csv":
+            p = p.with_suffix(".csv")
+        ok, msg = export_daily_summary_csv(p)
+        if ok:
+            QMessageBox.information(
+                self,
+                tr("settings.export.title"),
+                tr("settings.export.ok", path=msg),
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                tr("settings.export.title"),
+                tr("settings.export.fail", err=msg),
+            )
 
     def _on_app_update_clicked(self):
         if self._app_update_busy:
@@ -2401,9 +2831,11 @@ class SponsorMainWindow(QMainWindow):
             column.addWidget(b)
             self._settings_i18n_blurbs.append((b, blurb_key))
 
-    def _build_settings_scroll_content(self, left: QVBoxLayout, right: QVBoxLayout):
-        inner = getattr(self, "_settings_inner", None)
-        card_parent = inner if inner is not None else self
+
+
+    def _build_prefs_scroll_content(
+        self, left: QVBoxLayout, right: QVBoxLayout, card_parent: QWidget
+    ) -> None:
         gui_sound = self.config.get("gui") or {}
         self._settings_i18n_headings.clear()
         self._settings_i18n_blurbs.clear()
@@ -2423,9 +2855,7 @@ class SponsorMainWindow(QMainWindow):
         for _val, lk in _lang_pairs:
             self._ui_lang_combo.addItem(tr(lk), _val)
         raw_ui = str(gui_sound.get("ui_language", "auto")).strip().lower()
-        _sel_lang = (
-            "auto" if raw_ui in ("auto", "", "system") else normalize_ui_language_raw(raw_ui)
-        )
+        _sel_lang = "auto" if raw_ui in ("auto", "", "system") else normalize_ui_language_raw(raw_ui)
         with QSignalBlocker(self._ui_lang_combo):
             for _i in range(self._ui_lang_combo.count()):
                 if self._ui_lang_combo.itemData(_i) == _sel_lang:
@@ -2434,41 +2864,37 @@ class SponsorMainWindow(QMainWindow):
         self._ui_lang_combo.currentIndexChanged.connect(self._on_ui_language_changed)
         lang_l.addWidget(self._ui_lang_combo)
         left.addWidget(lang_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        self._add_settings_group(left, "settings.group.sync")
-        sync_card = _make_settings_group_card(card_parent)
-        sl = QVBoxLayout(sync_card)
-        sl.setContentsMargins(14, 12, 14, 12)
-        sl.setSpacing(10)
-        self.update_btn = QPushButton(tr("settings.fetch"))
-        self.update_btn.setObjectName("primary")
-        self.update_btn.clicked.connect(self._run_update)
-        self.update_btn.setMinimumHeight(38)
-        self._sched_btn = QPushButton(tr("settings.sched.start"))
-        self._sched_btn.setObjectName("success")
-        self._sched_btn.setMinimumHeight(38)
-        self._sched_btn.clicked.connect(self._toggle_schedule)
-        row_sync = QHBoxLayout()
-        row_sync.setSpacing(8)
-        row_sync.addWidget(self.update_btn, 1)
-        row_sync.addWidget(self._sched_btn, 1)
-        sl.addLayout(row_sync)
-        row_iv = QHBoxLayout()
-        self._lbl_sched_interval = _settings_form_label(tr("settings.sched.interval"))
-        row_iv.addWidget(self._lbl_sched_interval, 0)
-        self._sched_interval = QComboBox()
-        self._sched_interval.currentIndexChanged.connect(self._on_schedule_interval_changed)
-        self._rebuild_sched_interval_combo(
-            normalize_schedule_interval_id(str(gui_sound.get("schedule_interval") or "1h"))
-        )
-        row_iv.addWidget(self._sched_interval, 1)
-        sl.addLayout(row_iv)
-        self.update_status = QLabel("")
-        self.update_status.setObjectName("settingsStatus")
-        self.update_status.setWordWrap(True)
-        sl.addWidget(self.update_status)
-        left.addWidget(sync_card)
-        self._refresh_schedule_button_and_status()
+        self._add_settings_group(left, "settings.group.tray")
+        tray_card = _make_settings_group_card(card_parent)
+        tl = QVBoxLayout(tray_card)
+        tl.setContentsMargins(14, 12, 14, 12)
+        tl.setSpacing(8)
+        self._sw_close_tray = QCheckBox(tr("settings.tray.close"))
+        self._sw_close_tray.setChecked(self._close_to_tray)
+        self._sw_close_tray.toggled.connect(self._on_switch_close_to_tray)
+        self._sw_min_tray = QCheckBox(tr("settings.tray.min"))
+        self._sw_min_tray.setChecked(self._minimize_to_tray)
+        self._sw_min_tray.toggled.connect(self._on_switch_minimize_to_tray)
+        self._sw_start_tray = QCheckBox(tr("settings.tray.start"))
+        self._sw_start_tray.setChecked(self._start_minimized_to_tray)
+        self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
+        self._sw_autostart = QCheckBox(tr("settings.tray.autostart"))
+        with QSignalBlocker(self._sw_autostart):
+            self._sw_autostart.setChecked(self._start_with_windows)
+        if sys.platform != "win32":
+            self._sw_autostart.setEnabled(False)
+            self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
+        self._sw_autostart.toggled.connect(self._on_switch_autostart)
+        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
+            tl.addWidget(w)
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._sw_close_tray.setEnabled(False)
+            self._sw_min_tray.setEnabled(False)
+            self._sw_start_tray.setEnabled(False)
+        left.addWidget(tray_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
 
         self._add_settings_group(left, "settings.group.version", "settings.version.blurb")
         ver_card = _make_settings_group_card(card_parent)
@@ -2492,9 +2918,171 @@ class SponsorMainWindow(QMainWindow):
             self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
         ver_btn_row.addWidget(self._app_oneclick_btn, 1)
         vl.addLayout(ver_btn_row)
+        self._btn_github_repo = QPushButton(tr("settings.version.github"))
+        self._btn_github_repo.setMinimumHeight(36)
+        self._btn_github_repo.clicked.connect(self._on_open_github_repo_clicked)
+        _repo0 = (configured_github_repo() or "").strip()
+        if not _repo0 or _repo0.count("/") != 1:
+            self._btn_github_repo.setEnabled(False)
+            self._btn_github_repo.setToolTip(tr("settings.version.github_tip"))
+        vl.addWidget(self._btn_github_repo)
         left.addWidget(ver_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        self._add_settings_group(left, "settings.group.accounts")
+        self._add_settings_group(right, "settings.group.sound")
+        sound_card = _make_settings_group_card(card_parent)
+        sil = QVBoxLayout(sound_card)
+        sil.setContentsMargins(14, 12, 14, 12)
+        sil.setSpacing(10)
+        r1 = QHBoxLayout()
+        self._lbl_sound_system = _settings_form_label(tr("settings.sound.system"))
+        r1.addWidget(self._lbl_sound_system, 0)
+        self._increase_sound_preset = QComboBox()
+        self._increase_sound_preset.currentIndexChanged.connect(self._on_increase_sound_preset_changed)
+        self._rebuild_sound_preset_combo(gui_sound.get("increase_sound"))
+        r1.addWidget(self._increase_sound_preset, 1)
+        self._btn_sound_test = QPushButton(tr("settings.sound.test"))
+        self._btn_sound_test.clicked.connect(self._test_increase_sound)
+        r1.addWidget(self._btn_sound_test)
+        sil.addLayout(r1)
+        vr = QHBoxLayout()
+        self._lbl_sound_volume = _settings_form_label(tr("settings.sound.volume"))
+        vr.addWidget(self._lbl_sound_volume, 0)
+        self._sound_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self._sound_volume_slider.setRange(0, 100)
+        _v0 = int(float(gui_sound.get("increase_sound_volume", 100)))
+        self._sound_volume_slider.setValue(_v0)
+        self._sound_volume_slider.valueChanged.connect(self._on_sound_volume_slider)
+        vr.addWidget(self._sound_volume_slider, 1)
+        self._sound_volume_lbl = QLabel(f"{_v0}%")
+        vr.addWidget(self._sound_volume_lbl)
+        sil.addLayout(vr)
+        self._lbl_sound_wav = _settings_form_label(tr("settings.sound.wav"))
+        sil.addWidget(self._lbl_sound_wav)
+        self._increase_sound_wav_entry = QLineEdit()
+        self._increase_sound_wav_entry.setText(gui_sound.get("increase_sound_wav") or "")
+        self._increase_sound_wav_entry.editingFinished.connect(self._on_increase_sound_wav_done)
+        sil.addWidget(self._increase_sound_wav_entry)
+        right.addWidget(sound_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(right, "settings.group.discord")
+        dc = _make_settings_group_card(card_parent)
+        dcl = QVBoxLayout(dc)
+        dcl.setContentsMargins(14, 12, 14, 12)
+        dcl.setSpacing(10)
+        dcl.addWidget(_settings_form_label(tr("settings.discord.url")))
+        self._discord_webhook_entry = QLineEdit()
+        self._discord_webhook_entry.setPlaceholderText("https://discord.com/api/webhooks/...")
+        self._discord_webhook_entry.setText(gui_sound.get("discord_webhook_url") or "")
+        self._discord_webhook_entry.editingFinished.connect(self._on_discord_webhook_done)
+        dcl.addWidget(self._discord_webhook_entry)
+        dbtn = QHBoxLayout()
+        self._btn_discord_test = QPushButton(tr("settings.discord.test"))
+        self._btn_discord_test.clicked.connect(self._test_discord_webhook)
+        dbtn.addWidget(self._btn_discord_test)
+        dbtn.addStretch()
+        dcl.addLayout(dbtn)
+        self._sw_daily_report = QCheckBox(tr("settings.discord.daily"))
+        self._sw_daily_report.setChecked(bool(gui_sound.get("daily_report_enabled")))
+        self._sw_daily_report.toggled.connect(self._on_daily_report_switch)
+        dcl.addWidget(self._sw_daily_report)
+        dtr = QHBoxLayout()
+        self._lbl_discord_time = _settings_form_label(tr("settings.discord.time"))
+        dtr.addWidget(self._lbl_discord_time, 0)
+        self._daily_report_time_entry = QLineEdit()
+        _drt = gui_sound.get("daily_report_time_jst") or "09:00"
+        _parsed_drt = parse_jst_hhmm(str(_drt))
+        if _parsed_drt:
+            _drt = f"{_parsed_drt[0]:02d}:{_parsed_drt[1]:02d}"
+        self._daily_report_time_entry.setText(_drt)
+        self._daily_report_time_entry.editingFinished.connect(self._on_daily_report_time_done)
+        dtr.addWidget(self._daily_report_time_entry, 1)
+        self._btn_discord_report_test = QPushButton(tr("settings.discord.test_report"))
+        self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
+        dtr.addWidget(self._btn_discord_report_test)
+        dcl.addLayout(dtr)
+        right.addWidget(dc)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        left.addStretch(1)
+        right.addStretch(1)
+
+
+    def _build_account_scroll_content(
+        self, left: QVBoxLayout, right: QVBoxLayout, card_parent: QWidget
+    ) -> None:
+        gui_sound = self.config.get("gui") or {}
+
+        self._add_settings_group(left, "settings.group.sync")
+        sync_card = _make_settings_group_card(card_parent)
+        sl = QVBoxLayout(sync_card)
+        sl.setContentsMargins(14, 12, 14, 12)
+        sl.setSpacing(10)
+        self.update_btn = QPushButton(tr("settings.fetch"))
+        self.update_btn.setObjectName("primary")
+        self.update_btn.clicked.connect(self._run_update)
+        self.update_btn.setMinimumHeight(38)
+        self._sched_btn = QPushButton(tr("settings.sched.start"))
+        self._sched_btn.setObjectName("success")
+        self._sched_btn.setMinimumHeight(38)
+        self._sched_btn.clicked.connect(self._toggle_schedule)
+        row_sync = QHBoxLayout()
+        row_sync.setSpacing(8)
+        row_sync.addWidget(self.update_btn, 1)
+        row_sync.addWidget(self._sched_btn, 1)
+        sl.addLayout(row_sync)
+        self._fetch_hint_lbl = QLabel(tr("settings.fetch.hint"))
+        self._fetch_hint_lbl.setVisible(False)
+        self._fetch_hint_lbl.setObjectName("settingsStatus")
+        self._fetch_hint_lbl.setStyleSheet(
+            f"color: {PALETTE['accent']}; font-weight: 600; font-size: 13px;"
+        )
+        sl.addWidget(self._fetch_hint_lbl)
+        row_iv = QHBoxLayout()
+        self._lbl_sched_interval = _settings_form_label(tr("settings.sched.interval"))
+        row_iv.addWidget(self._lbl_sched_interval, 0)
+        self._sched_interval = QComboBox()
+        self._sched_interval.currentIndexChanged.connect(self._on_schedule_interval_changed)
+        self._rebuild_sched_interval_combo(
+            normalize_schedule_interval_id(str(gui_sound.get("schedule_interval") or "1h"))
+        )
+        row_iv.addWidget(self._sched_interval, 1)
+        sl.addLayout(row_iv)
+        self.update_status = QLabel("")
+        self.update_status.setObjectName("settingsStatus")
+        self.update_status.setWordWrap(True)
+        sl.addWidget(self.update_status)
+        self._sched_summary_lbl = QLabel("")
+        self._sched_summary_lbl.setObjectName("settingsFormLabel")
+        self._sched_summary_lbl.setWordWrap(True)
+        self._sched_summary_lbl.setStyleSheet(f"color: {PALETTE['text_secondary']};")
+        sl.addWidget(self._sched_summary_lbl)
+
+        left.addWidget(sync_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(left, "settings.export.title", "settings.export.blurb")
+        export_card = _make_settings_group_card(card_parent)
+        ex_l = QVBoxLayout(export_card)
+        ex_l.setContentsMargins(14, 12, 14, 12)
+        ex_l.setSpacing(8)
+        self._btn_export_csv = QPushButton(tr("settings.export.btn"))
+        self._btn_export_csv.setMinimumHeight(36)
+        self._btn_export_csv.clicked.connect(self._on_export_daily_csv_clicked)
+        ex_l.addWidget(self._btn_export_csv)
+        left.addWidget(export_card)
+        left.addSpacing(_SETTINGS_SECTION_VGAP)
+        self._refresh_schedule_button_and_status()
+        self._refresh_sched_summary_line()
+
+        if not PLAYWRIGHT_AVAILABLE:
+            self._lbl_playwright_miss = QLabel(tr("settings.playwright.missing"))
+            self._lbl_playwright_miss.setStyleSheet(f"color: {PALETTE['warning']};")
+            left.addWidget(self._lbl_playwright_miss)
+            left.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(right, "settings.group.accounts")
         acc_card = _make_settings_group_card(card_parent)
         acc_l = QVBoxLayout(acc_card)
         acc_l.setContentsMargins(0, 2, 0, 2)
@@ -2539,9 +3127,7 @@ class SponsorMainWindow(QMainWindow):
                 logged = bool((cfg.get("cookies") or "").strip() and "xxx" not in (cfg.get("cookies") or ""))
             else:
                 _sid = (cfg.get("session_id") or "").strip()
-                logged = bool(_sid) and "\u4f60\u7684" not in _sid and not _sid.lower().startswith(
-                    "your "
-                )
+                logged = bool(_sid) and "\u4f60\u7684" not in _sid and not _sid.lower().startswith("your ")
             st = QLabel(tr("settings.account.in") if logged else tr("settings.account.out"))
             st.setStyleSheet(f"color: {PALETTE['success'] if logged else PALETTE['text_tertiary']};")
             st.setToolTip("")
@@ -2575,119 +3161,21 @@ class SponsorMainWindow(QMainWindow):
             bl.addWidget(logout_btn)
             bl.addStretch()
             rl.addLayout(bl)
+            sw_vis = QCheckBox(tr("settings.platform.show_overview"))
+            _g_vis = self.config.get("gui") or {}
+            _sp_vis = _g_vis.get("show_platforms") or {}
+            sw_vis.setChecked(True if _sp_vis.get(key) is None else bool(_sp_vis.get(key)))
+            sw_vis.toggled.connect(partial(self._on_platform_visibility_toggled, key))
+            setattr(self, f"_sw_plat_vis_{key}", sw_vis)
+            rl.addWidget(sw_vis)
             acc_l.addWidget(roww)
-        left.addWidget(acc_card)
+        right.addWidget(acc_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
 
         if not PLAYWRIGHT_AVAILABLE:
             for key in ("patreon", "fanbox", "fantia"):
                 getattr(self, f"{key}_btn").setEnabled(False)
                 getattr(self, f"{key}_logout_btn").setEnabled(False)
-            self._lbl_playwright_miss = QLabel(tr("settings.playwright.missing"))
-            self._lbl_playwright_miss.setStyleSheet(f"color: {PALETTE['warning']};")
-            left.addWidget(self._lbl_playwright_miss)
-
-        self._add_settings_group(right, "settings.group.sound")
-        sound_card = _make_settings_group_card(card_parent)
-        sil = QVBoxLayout(sound_card)
-        sil.setContentsMargins(14, 12, 14, 12)
-        sil.setSpacing(10)
-        r1 = QHBoxLayout()
-        self._lbl_sound_system = _settings_form_label(tr("settings.sound.system"))
-        r1.addWidget(self._lbl_sound_system, 0)
-        self._increase_sound_preset = QComboBox()
-        self._increase_sound_preset.currentIndexChanged.connect(self._on_increase_sound_preset_changed)
-        self._rebuild_sound_preset_combo(gui_sound.get("increase_sound"))
-        r1.addWidget(self._increase_sound_preset, 1)
-        self._btn_sound_test = QPushButton(tr("settings.sound.test"))
-        self._btn_sound_test.clicked.connect(self._test_increase_sound)
-        r1.addWidget(self._btn_sound_test)
-        sil.addLayout(r1)
-        vr = QHBoxLayout()
-        self._lbl_sound_volume = _settings_form_label(tr("settings.sound.volume"))
-        vr.addWidget(self._lbl_sound_volume, 0)
-        self._sound_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._sound_volume_slider.setRange(0, 100)
-        _v0 = int(float(gui_sound.get("increase_sound_volume", 100)))
-        self._sound_volume_slider.setValue(_v0)
-        self._sound_volume_slider.valueChanged.connect(self._on_sound_volume_slider)
-        vr.addWidget(self._sound_volume_slider, 1)
-        self._sound_volume_lbl = QLabel(f"{_v0}%")
-        vr.addWidget(self._sound_volume_lbl)
-        sil.addLayout(vr)
-        self._lbl_sound_wav = _settings_form_label(tr("settings.sound.wav"))
-        sil.addWidget(self._lbl_sound_wav)
-        self._increase_sound_wav_entry = QLineEdit()
-        self._increase_sound_wav_entry.setText(gui_sound.get("increase_sound_wav") or "")
-        self._increase_sound_wav_entry.editingFinished.connect(self._on_increase_sound_wav_done)
-        sil.addWidget(self._increase_sound_wav_entry)
-        right.addWidget(sound_card)
-
-        self._add_settings_group(right, "settings.group.discord")
-        dc = _make_settings_group_card(card_parent)
-        dcl = QVBoxLayout(dc)
-        dcl.setContentsMargins(14, 12, 14, 12)
-        dcl.setSpacing(10)
-        dcl.addWidget(_settings_form_label(tr("settings.discord.url")))
-        self._discord_webhook_entry = QLineEdit()
-        self._discord_webhook_entry.setPlaceholderText("https://discord.com/api/webhooks/...")
-        self._discord_webhook_entry.setText(gui_sound.get("discord_webhook_url") or "")
-        self._discord_webhook_entry.editingFinished.connect(self._on_discord_webhook_done)
-        dcl.addWidget(self._discord_webhook_entry)
-        dbtn = QHBoxLayout()
-        self._btn_discord_test = QPushButton(tr("settings.discord.test"))
-        self._btn_discord_test.clicked.connect(self._test_discord_webhook)
-        dbtn.addWidget(self._btn_discord_test)
-        dbtn.addStretch()
-        dcl.addLayout(dbtn)
-        self._sw_daily_report = QCheckBox(tr("settings.discord.daily"))
-        self._sw_daily_report.setChecked(bool(gui_sound.get("daily_report_enabled")))
-        self._sw_daily_report.toggled.connect(self._on_daily_report_switch)
-        dcl.addWidget(self._sw_daily_report)
-        dtr = QHBoxLayout()
-        self._lbl_discord_time = _settings_form_label(tr("settings.discord.time"))
-        dtr.addWidget(self._lbl_discord_time, 0)
-        self._daily_report_time_entry = QLineEdit()
-        _drt = gui_sound.get("daily_report_time_jst") or "09:00"
-        _parsed_drt = parse_jst_hhmm(str(_drt))
-        if _parsed_drt:
-            _drt = f"{_parsed_drt[0]:02d}:{_parsed_drt[1]:02d}"
-        self._daily_report_time_entry.setText(_drt)
-        self._daily_report_time_entry.editingFinished.connect(self._on_daily_report_time_done)
-        dtr.addWidget(self._daily_report_time_entry, 1)
-        self._btn_discord_report_test = QPushButton(tr("settings.discord.test_report"))
-        self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
-        dtr.addWidget(self._btn_discord_report_test)
-        dcl.addLayout(dtr)
-        right.addWidget(dc)
-
-        self._add_settings_group(right, "settings.group.tray")
-        tray_card = _make_settings_group_card(card_parent)
-        tl = QVBoxLayout(tray_card)
-        tl.setContentsMargins(14, 12, 14, 12)
-        tl.setSpacing(8)
-        self._sw_close_tray = QCheckBox(tr("settings.tray.close"))
-        self._sw_close_tray.setChecked(self._close_to_tray)
-        self._sw_close_tray.toggled.connect(self._on_switch_close_to_tray)
-        self._sw_min_tray = QCheckBox(tr("settings.tray.min"))
-        self._sw_min_tray.setChecked(self._minimize_to_tray)
-        self._sw_min_tray.toggled.connect(self._on_switch_minimize_to_tray)
-        self._sw_start_tray = QCheckBox(tr("settings.tray.start"))
-        self._sw_start_tray.setChecked(self._start_minimized_to_tray)
-        self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
-        self._sw_autostart = QCheckBox(tr("settings.tray.autostart"))
-        with QSignalBlocker(self._sw_autostart):
-            self._sw_autostart.setChecked(self._start_with_windows)
-        if sys.platform != "win32":
-            self._sw_autostart.setEnabled(False)
-            self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
-        self._sw_autostart.toggled.connect(self._on_switch_autostart)
-        for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
-            tl.addWidget(w)
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            self._sw_close_tray.setEnabled(False)
-            self._sw_min_tray.setEnabled(False)
-            self._sw_start_tray.setEnabled(False)
-        right.addWidget(tray_card)
 
         self._add_settings_group(right, "settings.group.purge", "settings.purge.blurb")
         purge_card = _make_settings_group_card(card_parent)
@@ -2702,6 +3190,7 @@ class SponsorMainWindow(QMainWindow):
         self._purge_btn.clicked.connect(self._master_clear_login_and_history)
         pr.addWidget(self._purge_btn)
         right.addWidget(purge_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
 
         left.addStretch(1)
         right.addStretch(1)
@@ -2845,7 +3334,7 @@ class SponsorMainWindow(QMainWindow):
         def _run():
             try:
                 s = get_dashboard_stats()
-                period = get_period_comparison(7)
+                period = get_total_vs_days_ago(7)
             except Exception as ex:
 
                 def _fail():
@@ -2904,7 +3393,7 @@ class SponsorMainWindow(QMainWindow):
                     continue
                 try:
                     s = get_dashboard_stats()
-                    period = get_period_comparison(7)
+                    period = get_total_vs_days_ago(7)
                 except Exception:
                     continue
                 _lg = effective_ui_language(cfg)
@@ -3104,6 +3593,10 @@ def main():
         _g["qt_theme"] = "dark"
         save_config(_cfg0)
     palette_apply()
+    # Per-monitor DPI: avoid wrong logical size when moving windows between screens.
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication(sys.argv)
     _ico0 = _app_icon_path()
     if _ico0 is not None:

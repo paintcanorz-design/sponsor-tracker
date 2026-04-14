@@ -1,6 +1,9 @@
 """資料庫模組 - 儲存贊助額與每日漲跌記錄"""
+import calendar
+import csv
 import os
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 from src.jst import date_days_ago_jst, now_jst, today_jst_str, yesterday_jst_str
@@ -205,6 +208,52 @@ def get_recent_records(platform: str = None, limit: int = 100):
         ).fetchall()
     finally:
         conn.close()
+
+
+def export_daily_summary_csv(dest: Path) -> tuple[bool, str]:
+    """Export all daily_summary rows to CSV (UTF-8 with BOM for Excel)."""
+    dest = Path(dest)
+    try:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                """SELECT date, platform, total_amount, patron_count, change_amount, change_percent, created_at
+                   FROM daily_summary ORDER BY date ASC, platform ASC"""
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as e:
+        return False, str(e)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(
+                [
+                    "date",
+                    "platform",
+                    "total_amount",
+                    "patron_count",
+                    "change_amount",
+                    "change_percent",
+                    "created_at",
+                ]
+            )
+            for r in rows:
+                w.writerow(
+                    [
+                        r["date"],
+                        r["platform"],
+                        r["total_amount"],
+                        r["patron_count"],
+                        r["change_amount"],
+                        r["change_percent"],
+                        r["created_at"],
+                    ]
+                )
+    except Exception as e:
+        return False, str(e)
+    return True, str(dest.resolve())
 
 
 def get_daily_summary(platform: str = None, days: int = 30):
@@ -419,6 +468,79 @@ def _combined_jpy_carried_forward(
             amt *= rate
         total += amt
     return total
+
+
+def _add_months_year_month(year: int, month: int, delta: int) -> tuple[int, int]:
+    m = month + delta
+    y = year
+    while m > 12:
+        m -= 12
+        y += 1
+    while m < 1:
+        m += 12
+        y -= 1
+    return y, m
+
+
+def get_total_vs_days_ago(days: int = 7) -> dict | None:
+    """Combined JPY total now vs reconstructed total on the calendar day N days ago (carry-forward per platform)."""
+    days = max(0, int(days))
+    conn = get_connection()
+    try:
+        platforms = _platforms_in_daily_summary(conn)
+        if not platforms:
+            return None
+        cur_rows = conn.execute(
+            """SELECT platform, currency FROM sponsorship_records r
+               WHERE (platform, recorded_at) IN (
+                 SELECT platform, MAX(recorded_at) FROM sponsorship_records GROUP BY platform
+               )"""
+        ).fetchall()
+        currency_map = {r["platform"]: r["currency"] for r in cur_rows}
+        rate = _usd_jpy_rate()
+        today = today_jst_str()
+        past = date_days_ago_jst(days)
+        cur_total = _combined_jpy_carried_forward(conn, today, platforms, currency_map, rate)
+        past_total = _combined_jpy_carried_forward(conn, past, platforms, currency_map, rate)
+        if cur_total is None or past_total is None:
+            return None
+        change = cur_total - past_total
+        denom = past_total
+        pct = (change / denom * 100) if denom and abs(denom) > 1e-6 else None
+        return {
+            "current_total": cur_total,
+            "past_total": past_total,
+            "change_amount": change,
+            "change_percent": pct,
+            "days": days,
+        }
+    finally:
+        conn.close()
+
+
+def get_chart_combined_monthly_peaks_last12() -> list[tuple[str, float]]:
+    """Last 12 JST months: each row is (month-start YYYY-MM-DD, peak daily combined JPY in that month)."""
+    today_d = now_jst().date()
+    y0, m0 = today_d.year, today_d.month
+    out: list[tuple[str, float]] = []
+    for back in range(11, -1, -1):
+        yy, mm = _add_months_year_month(y0, m0, -back)
+        start_d = date(yy, mm, 1)
+        start_s = start_d.isoformat()
+        last_dom = calendar.monthrange(yy, mm)[1]
+        end_d = date(yy, mm, last_dom)
+        if end_d > today_d:
+            end_d = today_d
+        end_s = end_d.isoformat()
+        if start_s > end_s:
+            out.append((start_s, 0.0))
+            continue
+        data = get_chart_combined_daily_between(start_s, end_s)
+        if not data:
+            out.append((start_s, 0.0))
+        else:
+            out.append((start_s, max(float(row[1]) for row in data)))
+    return out
 
 
 def get_period_comparison(days: int = 7):

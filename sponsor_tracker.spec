@@ -59,6 +59,8 @@ a = Analysis(
         "src.i18n",
         "src.i18n_table",
         "PySide6.QtCharts",
+        "PySide6.QtSvg",
+        "src.qt_app.ui_assets",
         "src.auth.browser_login",
         "src.playwright_frozen_env",
         "src.fetchers",
