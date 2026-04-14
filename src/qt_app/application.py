@@ -2972,8 +2972,6 @@ class SponsorMainWindow(QMainWindow):
         left.addWidget(cur_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        left.addStretch(1)
-
         self._add_settings_group(left, "settings.group.discord")
         dc = _make_settings_group_card(card_parent)
         dcl = QVBoxLayout(dc)
@@ -3012,6 +3010,7 @@ class SponsorMainWindow(QMainWindow):
         dcl.addLayout(dtr)
         left.addWidget(dc)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
+        left.addStretch(1)
 
         self._add_settings_group(right, "settings.group.tray")
         tray_card = _make_settings_group_card(card_parent)
