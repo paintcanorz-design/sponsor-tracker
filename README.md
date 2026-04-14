@@ -1,60 +1,99 @@
-■ 這個程式是做什麼的？
-  在電腦上查看 Patreon、Fanbox、Fantia 等贊助金額與人數，可自己按更新，也可排程自動更新，
-  並可開小視窗放在桌面角落隨時看。
+# Sponsor Tracker
 
+Portable Windows app to **track combined sponsorship revenue** from **Patreon**, **pixiv Fanbox**, and **Fantia** (JPY-focused dashboard, Japan time JST).
 
-■ 從 GitHub 下載 zip 的使用者（一般建議流程）
+**UI languages:** Traditional Chinese, English, Japanese (auto-detect or choose in Settings).
 
-  1. 將 zip 解壓縮到任意資料夾（請勿只解出單一檔案，要整包解壓）。
-  2. 第一次使用時，請先雙擊資料夾內的：
-       「開啟exe前請開啟此檔案安裝所需環境.bat」
-     這會下載並安裝程式用來連線網頁的「虛擬瀏覽器」（Playwright 用 Chromium，
-     約數百 MB，需網路）。安裝成功後，畫面會提示並可自動開啟主程式。
-     （若您打算改用手動貼 Cookie、不用程式內建的瀏覽器登入，可略過此步驟。）
-  3. 之後請雙擊「贊助額追蹤.exe」開啟程式。
-  4. 開啟右上角「設定」→「平台登入」：依 Patreon、Fanbox、Fantia 分別按「登入」，
-     在跳出視窗內完成該網站登入後，回到本程式按「已完成」，狀態顯示已登入即可開始使用。
-     若某網站不允許此方式登入，請依畫面說明改用帳號密碼在網頁登入，或改用手動貼上 Cookie。
-  5. 重要：傳給別人或備份時，請整個解壓後的資料夾一起複製（須含「贊助額追蹤.exe」
-     與「_internal」等子資料夾），不要只複製單一 exe。
+---
 
+## 繁體中文（台灣）
 
-■ 還有別的開啟方式嗎？
+### 這是什麼？
 
-  · 雙擊「【一鍵啟動】贊助額追蹤.bat」：會優先尋找與 zip 同樣結構的安裝資料夾並開啟 exe；
-    若尚未解壓或路徑不同，可能改以原始碼方式啟動（需已安裝 Python 與依賴）。
+協助創作者把多平台的贊助／月費收入**合併觀察**：即時總額、走勢圖、每週與昨日對比、各平台卡片，並可排程自動更新、Discord Webhook（贊助增加或每日報表）、系統匣與迷你監控窗。
 
+### 主要功能
 
-■ 畫面上怎麼用？
+- **多平台登入與抓取**：Patreon（Cookie）、Fanbox（Cookie）、Fantia（`_session_id`）；瀏覽器登入依賴 Playwright Chromium。
+- **儀表板**：合計（日圓換算）、贊助人數、週對週、昨日金額變化、各平台明細、走勢（月／年）。
+- **排程更新**：可選 15 分～4 小時間隔；偵測到增加可播通知音並可推播至 Discord。
+- **國際化**：依系統語言或使用者在設定中選擇介面語言（繁中／英文／日文）。
+- **Windows 免安裝**：PyInstaller 產生 `SponsorTracker` 資料夾；**一鍵更新**會從 GitHub Release 下載你上傳的 `.zip` 覆寫程式（保留 `config.yaml` 與資料庫）。
 
-  · 總覽：看到總金額、各平台、走勢圖。
-  · 抓取贊助資料：馬上向網站抓最新數字（設定裡也有同樣按鈕）。
-  · 迷你監控窗：把畫面縮成小視窗；在小視窗上按右鍵可選「置頂」「立即更新」「開啟主視窗」等。
+### 環境與首次執行
 
+1. 複製 `config.example.yaml` 為 `config.yaml`（若尚無）。
+2. 依說明安裝 **Python 依賴** 與 **`playwright install chromium`**（打包版使用者執行同資料夾內的環境安裝批次檔）。
+3. 執行 `SponsorTracker.exe`（或開發模式 `python run_gui.py`）。
 
-■ 設定裡有什麼？（按右上角「設定」）
+### 更新與版本
 
-  · 更新與排程：多久自動抓一次資料、要不要開排程。
-  · 程式版本：看目前版本；可按「檢查更新」看有沒有新版程式。
-    若發現數字一直不會更新，可先按「檢查更新」；若程式已經是最新版仍異常，請等候之後釋出的更新。
-  · 一鍵更新程式（僅 Windows 免安裝 exe）：有新版時可自動下載、關閉程式後覆寫檔案；
-    若專案裡有「【一鍵啟動】贊助額追蹤.bat」，會改跟您平常一樣先跑該腳本再開程式；否則直接開 exe。
-    您的設定與資料庫會保留（與「檢查更新」只開瀏覽器下載頁不同）。
-  · 平台登入：見上文「從 GitHub 下載 zip」第 4 點。
-  · 開機時是否自動啟動程式（僅 Windows）、通知音效、Discord、工作列小圖示：依畫面說明勾選即可。
-  · 資料清除：會刪除登入狀態與本程式記錄的贊助資料，且無法還原，請謹慎使用。
+- 程式內建版本號見 **`src/version.py`** 的 `APP_VERSION`（目前與 **1.1** 對應為 `1.1.0`）。
+- **GitHub**：推送 **`v*`** 標籤（例如 `v1.1.0`）會觸發 Actions 建置並上傳 **`SponsorTracker-Windows-v{version}.zip`**。一鍵更新需要 Release 上的**自訂 zip**（內含 `SponsorTracker.exe` 與 `_internal`），請勿僅依賴「Source code」自動壓縮檔。
+- 本機打包 zip：`.\scripts\build_windows_zip.ps1`（需已安裝 `requirements-build.txt`）。
 
+### 設定倉庫
 
+- `GITHUB_REPO` 於 `src/version.py` 設為 `owner/repo`，與 Release 來源一致時，程式可檢查更新並執行一鍵更新。
 
-■ 我的資料存在哪裡？
+---
 
-  登入狀態與紀錄都存在您電腦上的程式資料夾內，不會自動上傳。
-  請勿把整個設定檔或資料檔公開給陌生人，以免外洩帳號相關資訊。
+## English
 
+### What is this?
 
-■ 常見狀況
+A **portable Windows** tool for creators to monitor **combined sponsorship income** across **Patreon**, **Fanbox**, and **Fantia**, with totals converted toward **JPY**, schedules in **JST**, charts, Discord notifications, and a system-tray / mini dashboard.
 
-  · 按「登入」後按「已完成」仍失敗：請確認已在網站畫面上真的登入成功，再按「已完成」；
-    並確認已執行過「開啟exe前…」bat 且顯示安裝成功（虛擬瀏覽器需網路下載）。
-  · 複製程式到別台電腦：請整個資料夾一起複製（含 _internal），不要只複製單一圖示。
+### Features
 
+- **Fetch & login**: Patreon cookies, Fanbox cookies, Fantia session; browser login uses **Playwright Chromium**.
+- **Dashboard**: totals, patron counts, week-over-week, day-over-day, per-platform breakdown, trend (month/year).
+- **Scheduled updates**: intervals from 15 minutes to 4 hours; optional sound + Discord webhook on increases and optional daily summary.
+- **i18n**: **Traditional Chinese**, **English**, **Japanese** — system language or explicit choice in Settings.
+- **Updates**: **One-click update** (portable exe only) downloads the **custom `.zip` asset** from the latest **GitHub Release** (not the auto-generated source archive). Your `config.yaml` and database are preserved.
+
+### Setup
+
+1. Copy `config.example.yaml` to `config.yaml` if needed.
+2. Install dependencies and run **`playwright install chromium`** (see project batch files for the frozen exe workflow).
+3. Run **`SponsorTracker.exe`** or `python run_gui.py` for development.
+
+### Releases & versioning
+
+- Bump **`APP_VERSION`** in `src/version.py` (current line with **1.1** is **`1.1.0`** for semver).
+- Push a git tag like **`v1.1.0`**. The **Release** workflow builds PyInstaller output and uploads **`SponsorTracker-Windows-v1.1.0.zip`**.
+- Local zip: `.\scripts\build_windows_zip.ps1` after `pip install -r requirements.txt -r requirements-build.txt`.
+
+---
+
+## 日本語
+
+### 概要
+
+**Patreon / pixiv Fanbox / Fantia** の支援・月額状況を **合算して把握** する **Windows 向けポータブル** アプリです。表示は **日本時間（JST）** を基準にし、金額は **円換算の合計** を中心に表示します。
+
+### 機能
+
+- **取得とログイン**：各プラットフォームの認証情報（Cookie / セッション）。ブラウザログインは **Playwright Chromium** が必要です。
+- **ダッシュボード**：合計・支援者数・週次比・前日比・プラットフォーム別・推移グラフ（月／年）。
+- **スケジュール更新**：15 分～4 時間閔隔。増加検知時の通知音、**Discord** への投稿、毎日定時のサマリーに対応。
+- **表示言語**：**繁体字中国語 / 英語 / 日本語**（自動または設定で変更）。
+- **更新**：**ポータブル exe** では GitHub の **最新 Release に添付された zip**（`SponsorTracker.exe` と `_internal` を含む）から **ワンクリック更新** できます。`config.yaml` と DB は保持されます。
+
+### セットアップ
+
+1. `config.example.yaml` を `config.yaml` にコピー。
+2. 依存関係と **`playwright install chromium`** を実行（同梱の bat 参照）。
+3. **`SponsorTracker.exe`** を実行（開発時は `python run_gui.py`）。
+
+### リリース
+
+- バージョンは **`src/version.py`** の `APP_VERSION`（**1.1** 対応は **`1.1.0`**）。
+- **`v1.1.0`** のような **タグを push** すると GitHub Actions がビルドし、**`SponsorTracker-Windows-v1.1.0.zip`** を Release に添付します。
+- 手元で zip：`.\scripts\build_windows_zip.ps1`
+
+---
+
+## Repository
+
+Default GitHub repo for in-app update checks: **`src/version.py`** (`GITHUB_REPO`).

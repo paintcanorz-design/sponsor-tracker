@@ -98,13 +98,27 @@ from src.app_update import (
     version_newer_than,
 )
 
+from src.i18n import (
+    INCREASE_SOUND_KEYS,
+    LANG_EN,
+    LANG_JA,
+    LANG_ZH_TW,
+    SCHEDULE_INTERVAL_MINUTES,
+    effective_ui_language,
+    get_language,
+    increase_sound_label,
+    migrate_config_schedule_interval,
+    normalize_schedule_interval_id,
+    normalize_ui_language_raw,
+    schedule_interval_label,
+    set_language,
+    system_language_guess,
+    tr,
+)
 from src.qt_app.shared import (
     FONT_FALLBACKS,
-    INCREASE_SOUND_PRESET_LABELS,
     PALETTE,
     palette_apply,
-    _INCREASE_SOUND_KEY_TO_LABEL,
-    _INCREASE_SOUND_LABEL_TO_KEY,
     detach_windows_console_if_present,
     load_config,
     parse_jst_hhmm,
@@ -541,13 +555,10 @@ class CompactFloatWindow(QWidget):
     def __init__(self, app: SponsorMainWindow):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         self._app = app
-        self.setWindowTitle("\u8d0a\u52a9\u984d\u8ffd\u8e64 \u00b7 \u8ff7\u4f60\u5100\u8868")
+        self.setWindowTitle(tr("app.title_compact"))
         self.setMinimumWidth(260)
         self.setStyleSheet(_compact_window_stylesheet())
-        self.setToolTip(
-            "\u53f3\u9375\u958b\u555f\u9078\u55ae\uff08\u7f6e\u9802\u3001\u66f4\u65b0\u3001\u4e3b\u8996\u7a97\uff09"
-            "\u3002\u96d9\u64ca\u7a97\u53e3\u958b\u555f\u4e3b\u8996\u7a97\u3002"
-        )
+        self.setToolTip(tr("compact.tooltip"))
 
         scr = QGuiApplication.primaryScreen()
         if scr is not None:
@@ -679,15 +690,15 @@ class CompactFloatWindow(QWidget):
 
     def _show_compact_menu(self, host: QWidget, pos: QPoint):
         menu = QMenu(self)
-        act_top = QAction("\u7f6e\u9802", self)
+        act_top = QAction(tr("header.pin"), self)
         act_top.setCheckable(True)
         act_top.setChecked(bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
         act_top.toggled.connect(self._on_topmost_toggled)
         menu.addAction(act_top)
-        act_up = QAction("\u7acb\u5373\u66f4\u65b0\u6578\u64da", self)
+        act_up = QAction(tr("tray.update"), self)
         act_up.triggered.connect(self._app._run_update)
         menu.addAction(act_up)
-        act_main = QAction("\u958b\u555f\u4e3b\u8996\u7a97", self)
+        act_main = QAction(tr("tray.show"), self)
         act_main.triggered.connect(self._expand)
         menu.addAction(act_main)
         menu.exec(host.mapToGlobal(pos))
@@ -717,7 +728,8 @@ class CompactFloatWindow(QWidget):
         total = s.get("total_amount") or 0
         patrons = s.get("total_patron_count") or 0
         self._total_lbl.setText(f"\u00a5{total:,.0f}")
-        self._patron_lbl.setText(f"{patrons} \u4eba")
+        pp = tr("common.people")
+        self._patron_lbl.setText(f"{patrons} {pp}".strip() if pp else str(patrons))
         rate = float(s.get("fx_usd_jpy") or 150)
         platforms = s.get("by_platform") or []
         tc = PALETTE["text"]
@@ -742,11 +754,14 @@ class CompactFloatWindow(QWidget):
                     f"<span style='color:{color}; font-weight:600; font-size:10px; "
                     f"letter-spacing:0.2px'>\u25cf {name_esc}</span>"
                 )
+                pc_ct = int(p.get("patron_count") or 0)
+                pp3 = tr("common.people")
+                pc_s = f"{pc_ct} {pp3}".strip() if pp3 else str(pc_ct)
                 line2 = (
                     f"<span style='color:{tc}; font-weight:700; font-size:15px; "
                     f"letter-spacing:-0.4px'>\u00a5{amt:,.0f}</span>"
                     f"<span style='color:{tcs}; font-weight:600; font-size:12px'>"
-                    f"&nbsp;&nbsp;{int(p.get('patron_count') or 0)} \u4eba</span>"
+                    f"&nbsp;&nbsp;{pc_s}</span>"
                 )
                 lbl.setText(line1 + "<br>" + line2)
             else:
@@ -782,14 +797,16 @@ class SponsorMainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("\u8d0a\u52a9\u984d\u8ffd\u8e64")
+        self.config = load_config()
+        if migrate_config_schedule_interval(self.config):
+            save_config(self.config)
+        set_language(effective_ui_language(self.config))
+        self.setWindowTitle(tr("app.title"))
         _ico = _app_icon_path()
         if _ico is not None:
             self.setWindowIcon(QIcon(str(_ico)))
         self.resize(1240, 820)
         self.setMinimumSize(980, 700)
-
-        self.config = load_config()
         _gui0 = self.config.get("gui") or {}
         self._sounds_muted = bool(_gui0.get("sounds_muted", False))
         self._close_to_tray = bool(_gui0.get("close_to_tray", True))
@@ -818,6 +835,9 @@ class SponsorMainWindow(QMainWindow):
         self._app_update_busy = False
         self._oneclick_busy = False
         self._oneclick_prog: QProgressDialog | None = None
+        self._settings_i18n_headings: list[tuple[QLabel, str]] = []
+        self._settings_i18n_blurbs: list[tuple[QLabel, str]] = []
+        self._last_update_time_jst: str = ""
         self._update_check_worker_done.connect(self._on_update_check_worker_done)
         self._browser_login_payload.connect(
             self._on_browser_login_payload, Qt.ConnectionType.QueuedConnection
@@ -857,39 +877,39 @@ class SponsorMainWindow(QMainWindow):
         self._tray = QSystemTrayIcon(self)
         _ico = _app_icon_path()
         self._tray.setIcon(QIcon(str(_ico)) if _ico is not None else QIcon(_tray_icon_pixmap()))
-        self._tray.setToolTip("\u8d0a\u52a9\u984d\u8ffd\u8e64")
+        self._tray.setToolTip(tr("tray.tip"))
         menu = QMenu()
         self._tray_menu = menu
-        act_show = QAction("\u986f\u793a\u4e3b\u8996\u7a97", self)
-        act_show.triggered.connect(self._tray_show_main)
-        menu.addAction(act_show)
+        self._tray_act_show = QAction(tr("tray.show"), self)
+        self._tray_act_show.triggered.connect(self._tray_show_main)
+        menu.addAction(self._tray_act_show)
         menu.addSeparator()
-        self._act_compact = QAction("\u8ff7\u4f60\u76e3\u63a7\u7a97", self)
+        self._act_compact = QAction(tr("tray.compact"), self)
         self._act_compact.setCheckable(True)
         self._act_compact.triggered.connect(self._tray_toggle_compact)
         menu.addAction(self._act_compact)
-        self._act_top = QAction("\u4e3b\u8996\u7a97\u7f6e\u9802", self)
+        self._act_top = QAction(tr("tray.main_top"), self)
         self._act_top.setCheckable(True)
         self._act_top.triggered.connect(self._toggle_topmost)
         menu.addAction(self._act_top)
         menu.addSeparator()
-        self._act_mute = QAction("\u975c\u97f3\uff08\u901a\u77e5\u97f3\u6548\uff09", self)
+        self._act_mute = QAction(tr("tray.mute"), self)
         self._act_mute.setCheckable(True)
         self._act_mute.triggered.connect(self._tray_toggle_mute)
         menu.addAction(self._act_mute)
-        act_up = QAction("\u7acb\u5373\u66f4\u65b0\u6578\u64da", self)
-        act_up.triggered.connect(self._run_update)
-        menu.addAction(act_up)
-        act_copy = QAction("\u8907\u88fd\u76ee\u524d\u7e3d\u91d1\u984d", self)
-        act_copy.triggered.connect(self._copy_dashboard_total_to_clipboard)
-        menu.addAction(act_copy)
+        self._tray_act_up = QAction(tr("tray.update"), self)
+        self._tray_act_up.triggered.connect(self._run_update)
+        menu.addAction(self._tray_act_up)
+        self._tray_act_copy = QAction(tr("tray.copy"), self)
+        self._tray_act_copy.triggered.connect(self._copy_dashboard_total_to_clipboard)
+        menu.addAction(self._tray_act_copy)
         menu.addSeparator()
-        act_restart = QAction("\u91cd\u555f\u7a0b\u5f0f", self)
-        act_restart.triggered.connect(self._restart_application)
-        menu.addAction(act_restart)
-        act_quit = QAction("\u7d50\u675f", self)
-        act_quit.triggered.connect(self._quit_fully)
-        menu.addAction(act_quit)
+        self._tray_act_restart = QAction(tr("tray.restart"), self)
+        self._tray_act_restart.triggered.connect(self._restart_application)
+        menu.addAction(self._tray_act_restart)
+        self._tray_act_quit = QAction(tr("tray.quit"), self)
+        self._tray_act_quit.triggered.connect(self._quit_fully)
+        menu.addAction(self._tray_act_quit)
         self._tray.setContextMenu(menu)
         menu.aboutToShow.connect(self._sync_tray_menu)
         self._tray.activated.connect(self._on_tray_activated)
@@ -912,7 +932,7 @@ class SponsorMainWindow(QMainWindow):
         if self._stack is not None and self._stack.currentIndex() != 0:
             self._stack.setCurrentIndex(0)
             if self._btn_settings_nav is not None:
-                self._btn_settings_nav.setText("\u8a2d\u5b9a")
+                self._btn_settings_nav.setText(tr("header.settings"))
         self.showNormal()
         self.raise_()
         self.activateWindow()
@@ -1012,10 +1032,11 @@ class SponsorMainWindow(QMainWindow):
         title_block = QVBoxLayout()
         title_block.setSpacing(2)
         title_block.setContentsMargins(0, 8, 0, 8)
-        t1 = QLabel("\u8d0a\u52a9\u984d\u8ffd\u8e64")
-        t1.setObjectName("appTitle")
-        t2 = QLabel("Patreon \u00b7 Fanbox \u00b7 Fantia")
-        t2.setObjectName("appSubtitle")
+        self._w_app_title = QLabel(tr("app.title"))
+        self._w_app_title.setObjectName("appTitle")
+        self._w_app_subtitle = QLabel(tr("app.subtitle"))
+        self._w_app_subtitle.setObjectName("appSubtitle")
+        t1, t2 = self._w_app_title, self._w_app_subtitle
         title_block.addWidget(t1)
         title_block.addWidget(t2)
         hl.addLayout(title_block)
@@ -1026,15 +1047,15 @@ class SponsorMainWindow(QMainWindow):
         seg_l = QHBoxLayout(seg)
         seg_l.setContentsMargins(4, 4, 4, 4)
         seg_l.setSpacing(3)
-        self._pin_btn = QPushButton("\u7f6e\u9802")
+        self._pin_btn = QPushButton(tr("header.pin"))
         self._pin_btn.setObjectName("headerPill")
         self._pin_btn.clicked.connect(self._toggle_topmost)
         seg_l.addWidget(self._pin_btn)
-        mini = QPushButton("\u8ff7\u4f60\u5100\u8868")
-        mini.setObjectName("headerPill")
-        mini.clicked.connect(self._show_compact)
-        seg_l.addWidget(mini)
-        self._btn_settings_nav = QPushButton("\u8a2d\u5b9a")
+        self._btn_header_mini = QPushButton(tr("header.mini"))
+        self._btn_header_mini.setObjectName("headerPill")
+        self._btn_header_mini.clicked.connect(self._show_compact)
+        seg_l.addWidget(self._btn_header_mini)
+        self._btn_settings_nav = QPushButton(tr("header.settings"))
         self._btn_settings_nav.setObjectName("headerPill")
         self._btn_settings_nav.clicked.connect(self._toggle_settings_view)
         seg_l.addWidget(self._btn_settings_nav)
@@ -1055,8 +1076,9 @@ class SponsorMainWindow(QMainWindow):
         hdr.setSpacing(16)
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
-        dash_title = QLabel("\u7d93\u71df\u7e3d\u89bd")
-        dash_title.setObjectName("pageHeadline")
+        self._w_dash_headline = QLabel(tr("dash.overview"))
+        self._w_dash_headline.setObjectName("pageHeadline")
+        dash_title = self._w_dash_headline
         title_col.addWidget(dash_title)
         hdr.addLayout(title_col, 1)
         self._last_update_lbl = QLabel("")
@@ -1078,8 +1100,9 @@ class SponsorMainWindow(QMainWindow):
 
         plat_hdr = QVBoxLayout()
         plat_hdr.setSpacing(0)
-        plat_title = QLabel("\u5404\u5e73\u53f0\u6578\u64da")
-        plat_title.setObjectName("platSectionLabel")
+        self._w_plat_section = QLabel(tr("dash.platforms"))
+        self._w_plat_section.setObjectName("platSectionLabel")
+        plat_title = self._w_plat_section
         plat_hdr.addWidget(plat_title)
         bl.addLayout(plat_hdr)
         self._dash_platforms = QWidget()
@@ -1169,10 +1192,228 @@ class SponsorMainWindow(QMainWindow):
             return
         if self._stack.currentIndex() == 0:
             self._stack.setCurrentIndex(1)
-            self._btn_settings_nav.setText("\u56de\u7e3d\u89bd")
+            self._btn_settings_nav.setText(tr("nav.back_dash"))
         else:
             self._stack.setCurrentIndex(0)
-            self._btn_settings_nav.setText("\u8a2d\u5b9a")
+            self._btn_settings_nav.setText(tr("header.settings"))
+
+    def _refresh_platform_login_labels(self) -> None:
+        for key in ("patreon", "fanbox", "fantia"):
+            if not hasattr(self, f"{key}_status"):
+                continue
+            st = getattr(self, f"{key}_status")
+            cfg = self.config.get(key, {})
+            if key in ("patreon", "fanbox"):
+                logged = bool(
+                    (cfg.get("cookies") or "").strip() and "xxx" not in (cfg.get("cookies") or "")
+                )
+            else:
+                _sid = (cfg.get("session_id") or "").strip()
+                logged = bool(_sid) and "\u4f60\u7684" not in _sid and not _sid.lower().startswith(
+                    "your "
+                )
+            st.setText(tr("settings.account.in") if logged else tr("settings.account.out"))
+            st.setStyleSheet(
+                f"color: {PALETTE['success'] if logged else PALETTE['text_tertiary']};"
+            )
+
+    def _on_ui_language_changed(self, _idx: int = 0) -> None:
+        combo = getattr(self, "_ui_lang_combo", None)
+        if combo is None:
+            return
+        raw = combo.currentData()
+        if raw is None:
+            return
+        self.config = load_config()
+        self.config.setdefault("gui", {})["ui_language"] = str(raw)
+        save_config(self.config)
+        set_language(effective_ui_language(self.config))
+        self._apply_full_retranslate()
+
+    def _rebuild_sched_interval_combo(self, select_sid: str | None = None) -> None:
+        if not hasattr(self, "_sched_interval"):
+            return
+        sid0 = normalize_schedule_interval_id(select_sid) if select_sid else self._sched_interval_sid()
+        with QSignalBlocker(self._sched_interval):
+            self._sched_interval.clear()
+            for sid in ("15m", "30m", "1h", "2h", "4h"):
+                self._sched_interval.addItem(schedule_interval_label(sid), sid)
+            for i in range(self._sched_interval.count()):
+                if self._sched_interval.itemData(i) == sid0:
+                    self._sched_interval.setCurrentIndex(i)
+                    break
+
+    def _sched_interval_sid(self) -> str:
+        sid = self._sched_interval.currentData() if hasattr(self, "_sched_interval") else None
+        if isinstance(sid, str) and sid in SCHEDULE_INTERVAL_MINUTES:
+            return sid
+        return normalize_schedule_interval_id(str(sid) if sid else "1h")
+
+    def _rebuild_sound_preset_combo(self, select_key: str | None = None) -> None:
+        if not hasattr(self, "_increase_sound_preset"):
+            return
+        if select_key is not None:
+            key0 = normalize_increase_sound_key(select_key)
+        else:
+            cur = self._increase_sound_preset.currentData()
+            if isinstance(cur, str) and cur in INCREASE_SOUND_KEYS:
+                key0 = cur
+            else:
+                key0 = normalize_increase_sound_key((load_config().get("gui") or {}).get("increase_sound"))
+        with QSignalBlocker(self._increase_sound_preset):
+            self._increase_sound_preset.clear()
+            for k in INCREASE_SOUND_KEYS:
+                self._increase_sound_preset.addItem(increase_sound_label(k), k)
+            for i in range(self._increase_sound_preset.count()):
+                if self._increase_sound_preset.itemData(i) == key0:
+                    self._increase_sound_preset.setCurrentIndex(i)
+                    break
+
+    def _refresh_schedule_button_and_status(self) -> None:
+        if not hasattr(self, "_sched_btn"):
+            return
+        if self._schedule_running:
+            self._sched_btn.setText(tr("settings.sched.stop"))
+            self._sched_btn.setObjectName("danger")
+            self._sched_btn.setStyleSheet(
+                f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
+                f"border-radius: 8px; font-weight: 600;"
+            )
+            sid = self._sched_interval_sid()
+            self.update_status.setText(
+                tr("settings.sched.running", interval=schedule_interval_label(sid))
+            )
+            self.update_status.setStyleSheet(f"color: {PALETTE['success']};")
+        else:
+            self._sched_btn.setText(tr("settings.sched.start"))
+            self._sched_btn.setObjectName("success")
+            self._sched_btn.setStyleSheet(
+                f"background-color: {PALETTE['success']}; color: #ffffff; border: none; "
+                f"border-radius: 8px; font-weight: 600;"
+            )
+            self.update_status.setText(tr("settings.sched.stopped"))
+            self.update_status.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
+
+    def _apply_full_retranslate(self) -> None:
+        self.setWindowTitle(tr("app.title"))
+        if self._w_app_title:
+            self._w_app_title.setText(tr("app.title"))
+        if self._w_app_subtitle:
+            self._w_app_subtitle.setText(tr("app.subtitle"))
+        self._pin_btn.setText(tr("header.pin"))
+        if hasattr(self, "_btn_header_mini"):
+            self._btn_header_mini.setText(tr("header.mini"))
+        if self._stack and self._btn_settings_nav:
+            if self._stack.currentIndex() == 0:
+                self._btn_settings_nav.setText(tr("header.settings"))
+            else:
+                self._btn_settings_nav.setText(tr("nav.back_dash"))
+        if self._w_dash_headline:
+            self._w_dash_headline.setText(tr("dash.overview"))
+        if self._w_plat_section:
+            self._w_plat_section.setText(tr("dash.platforms"))
+        if hasattr(self, "_w_trend_title") and self._w_trend_title:
+            self._w_trend_title.setText(tr("dash.trend"))
+        if hasattr(self, "_trend_range_combo"):
+            sel = self._trend_range_combo.currentData()
+            with QSignalBlocker(self._trend_range_combo):
+                self._trend_range_combo.clear()
+                self._trend_range_combo.addItem(tr("dash.month"), "month")
+                self._trend_range_combo.addItem(tr("dash.year"), "year")
+                for i in range(self._trend_range_combo.count()):
+                    if self._trend_range_combo.itemData(i) == sel:
+                        self._trend_range_combo.setCurrentIndex(i)
+                        break
+        if hasattr(self, "_plat_empty_lbl"):
+            self._plat_empty_lbl.setText(tr("dash.empty"))
+        if self._tray:
+            self._tray.setToolTip(tr("tray.tip"))
+            self._tray_act_show.setText(tr("tray.show"))
+            self._act_compact.setText(tr("tray.compact"))
+            self._act_top.setText(tr("tray.main_top"))
+            self._act_mute.setText(tr("tray.mute"))
+            self._tray_act_up.setText(tr("tray.update"))
+            self._tray_act_copy.setText(tr("tray.copy"))
+            self._tray_act_restart.setText(tr("tray.restart"))
+            self._tray_act_quit.setText(tr("tray.quit"))
+        cw = self._compact_win
+        if cw is not None:
+            cw.setWindowTitle(tr("app.title_compact"))
+            cw.setToolTip(tr("compact.tooltip"))
+            cw.refresh()
+        for lbl, key in self._settings_i18n_headings:
+            lbl.setText(tr(key))
+        for lbl, key in self._settings_i18n_blurbs:
+            lbl.setText(tr(key))
+        if hasattr(self, "_plat_hint_label"):
+            self._plat_hint_label.setText(tr("settings.platform.hint"))
+        if hasattr(self, "_lbl_sched_interval"):
+            self._lbl_sched_interval.setText(tr("settings.sched.interval"))
+        if hasattr(self, "_lbl_sound_system"):
+            self._lbl_sound_system.setText(tr("settings.sound.system"))
+        if hasattr(self, "_lbl_sound_volume"):
+            self._lbl_sound_volume.setText(tr("settings.sound.volume"))
+        if hasattr(self, "_lbl_sound_wav"):
+            self._lbl_sound_wav.setText(tr("settings.sound.wav"))
+        if hasattr(self, "_lbl_discord_time"):
+            self._lbl_discord_time.setText(tr("settings.discord.time"))
+        if hasattr(self, "_lbl_playwright_miss"):
+            self._lbl_playwright_miss.setText(tr("settings.playwright.missing"))
+        self._rebuild_sched_interval_combo()
+        self._rebuild_sound_preset_combo()
+        if hasattr(self, "_ui_lang_combo"):
+            pairs = (
+                ("auto", "lang.auto"),
+                (LANG_ZH_TW, "lang.zh_TW"),
+                (LANG_EN, "lang.en"),
+                (LANG_JA, "lang.ja"),
+            )
+            with QSignalBlocker(self._ui_lang_combo):
+                for i, (_val, lk) in enumerate(pairs):
+                    if i < self._ui_lang_combo.count():
+                        self._ui_lang_combo.setItemText(i, tr(lk))
+        if hasattr(self, "update_btn"):
+            self.update_btn.setText(tr("settings.fetch"))
+        self._refresh_schedule_button_and_status()
+        if hasattr(self, "_app_version_label"):
+            self._app_version_label.setText(tr("settings.version.current", v=current_app_version()))
+        if hasattr(self, "_app_update_btn"):
+            self._app_update_btn.setText(tr("settings.update.check"))
+        if hasattr(self, "_app_oneclick_btn"):
+            self._app_oneclick_btn.setText(tr("settings.update.oneclick"))
+            if not lazy_update_supported():
+                self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
+        for key in ("patreon", "fanbox", "fantia"):
+            if hasattr(self, f"{key}_btn"):
+                getattr(self, f"{key}_btn").setText(tr("settings.login"))
+            if hasattr(self, f"{key}_done_btn"):
+                getattr(self, f"{key}_done_btn").setText(tr("settings.done"))
+            if hasattr(self, f"{key}_logout_btn"):
+                getattr(self, f"{key}_logout_btn").setText(tr("settings.logout"))
+        if hasattr(self, "_btn_sound_test"):
+            self._btn_sound_test.setText(tr("settings.sound.test"))
+        if hasattr(self, "_btn_discord_test"):
+            self._btn_discord_test.setText(tr("settings.discord.test"))
+        if hasattr(self, "_btn_discord_report_test"):
+            self._btn_discord_report_test.setText(tr("settings.discord.test_report"))
+        if hasattr(self, "_sw_daily_report"):
+            self._sw_daily_report.setText(tr("settings.discord.daily"))
+        if hasattr(self, "_sw_close_tray"):
+            self._sw_close_tray.setText(tr("settings.tray.close"))
+        if hasattr(self, "_sw_min_tray"):
+            self._sw_min_tray.setText(tr("settings.tray.min"))
+        if hasattr(self, "_sw_start_tray"):
+            self._sw_start_tray.setText(tr("settings.tray.start"))
+        if hasattr(self, "_sw_autostart"):
+            self._sw_autostart.setText(tr("settings.tray.autostart"))
+            if sys.platform != "win32":
+                self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
+        if hasattr(self, "_purge_btn"):
+            self._purge_btn.setText(tr("settings.purge.btn"))
+        if self._last_update_time_jst:
+            self._last_update_lbl.setText(tr("dash.updated", t=self._last_update_time_jst))
+        self._refresh_platform_login_labels()
+        self._refresh_dashboard()
 
     # --- dashboard ---
     def _init_dashboard_layout(self):
@@ -1208,9 +1449,7 @@ class SponsorMainWindow(QMainWindow):
 
         self._plat_empty = _make_card(self._dash_platforms, "platTile")
         pel = QVBoxLayout(self._plat_empty)
-        self._plat_empty_lbl = QLabel(
-            "\u5c1a\u7121\u6578\u64da\n\u8acb\u5148\u958b\u555f\u53f3\u4e0a\u89d2\u300c\u8a2d\u5b9a\u300d\u767b\u5165\u4e26\u6293\u53d6\u8cc7\u6599"
-        )
+        self._plat_empty_lbl = QLabel(tr("dash.empty"))
         self._plat_empty_lbl.setFont(_qf(16))
         self._plat_empty_lbl.setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
         self._plat_empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1282,16 +1521,17 @@ class SponsorMainWindow(QMainWindow):
         self._dash_plat_grid.addWidget(self._plat_empty, 0, 0)
 
     def _build_trend_section(self, parent_layout: QVBoxLayout, page: QWidget) -> None:
-        trend_title = QLabel("\u5408\u8a08\u91d1\u984d\u8da8\u52e2")
-        trend_title.setObjectName("platSectionLabel")
+        self._w_trend_title = QLabel(tr("dash.trend"))
+        self._w_trend_title.setObjectName("platSectionLabel")
+        trend_title = self._w_trend_title
         hdr = QHBoxLayout()
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
         title_col.addWidget(trend_title)
         hdr.addLayout(title_col, 1)
         self._trend_range_combo = QComboBox()
-        self._trend_range_combo.addItem("\u672c\u6708", "month")
-        self._trend_range_combo.addItem("\u672c\u5e74", "year")
+        self._trend_range_combo.addItem(tr("dash.month"), "month")
+        self._trend_range_combo.addItem(tr("dash.year"), "year")
         self._trend_range_combo.currentIndexChanged.connect(lambda _i: self._refresh_trend_chart())
         hdr.addWidget(self._trend_range_combo, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
         parent_layout.addLayout(hdr)
@@ -1482,11 +1722,11 @@ class SponsorMainWindow(QMainWindow):
         inc_this = getattr(self, "_last_update_increase", None) or 0
         sub_parts: list[str] = []
         if not total:
-            sub_parts.append("\u5148\u57f7\u884c\u66f4\u65b0")
+            sub_parts.append(tr("dash.sub.run_first"))
         if inc_this > 0:
-            sub_parts.append(f"\u672c\u6b21\u66f4\u65b0 +\u00a5{inc_this:,.0f}")
+            sub_parts.append(tr("dash.sub.this_update", amt=f"{inc_this:,.0f}"))
         sub_total = "\n".join(sub_parts)
-        h0["title"].setText("\u7e3d\u6536\u76ca")
+        h0["title"].setText(tr("dash.hero.total"))
         h0["title"].setStyleSheet(
             f"color: {PALETTE['text_secondary']} !important; letter-spacing: 0.5px; font-weight: 600; font-size: 12px;"
         )
@@ -1497,18 +1737,19 @@ class SponsorMainWindow(QMainWindow):
 
         patrons = s.get("total_patron_count") or 0
         pch = s.get("patron_change")
-        h1["title"].setText("\u8d0a\u52a9\u4eba\u6578")
+        h1["title"].setText(tr("dash.hero.patrons"))
         h1["title"].setStyleSheet(
             f"color: {PALETTE['text_secondary']} !important; letter-spacing: 0.5px; font-weight: 600; font-size: 12px;"
         )
-        h1["value"].setText(f"{patrons} \u4eba")
+        pp = tr("common.people")
+        h1["value"].setText(f"{patrons} {pp}".strip() if pp else str(patrons))
         h1["value"].setStyleSheet(f"color: {PALETTE['text']} !important;")
-        h1["sub"].setText(f"\u8f03\u6628\u65e5 {pch:+d} \u4eba" if pch is not None else "")
+        h1["sub"].setText(tr("dash.sub.vs_yday_p", n=pch) if pch is not None else "")
         h1["sub"].setStyleSheet(
             f"color: {PALETTE['success'] if (pch or 0) >= 0 else PALETTE['error']} !important;"
         )
 
-        h2["title"].setText("\u672c\u9031\u8f03\u4e0a\u9031")
+        h2["title"].setText(tr("dash.hero.week"))
         h2["title"].setStyleSheet(
             f"color: {PALETTE['text_secondary']} !important; letter-spacing: 0.5px; font-weight: 600; font-size: 12px;"
         )
@@ -1523,14 +1764,14 @@ class SponsorMainWindow(QMainWindow):
             else:
                 c2_col = PALETTE["text_tertiary"]
             h2["value"].setStyleSheet(f"color: {c2_col} !important;")
-            h2["sub"].setText(f"\u8fd1{period['days']}\u5929 vs \u524d{period['days']}\u5929")
+            h2["sub"].setText(tr("dash.sub.period", n=period["days"]))
         else:
             h2["value"].setText("\u2014")
             h2["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
             h2["sub"].setText("")
         h2["sub"].setStyleSheet(f"color: {PALETTE['text_secondary']} !important;")
 
-        h3["title"].setText("\u8f03\u6628\u65e5\u91d1\u984d")
+        h3["title"].setText(tr("dash.hero.yday_amt"))
         h3["title"].setStyleSheet(
             f"color: {PALETTE['text_secondary']} !important; letter-spacing: 0.5px; font-weight: 600; font-size: 12px;"
         )
@@ -1544,7 +1785,7 @@ class SponsorMainWindow(QMainWindow):
             else:
                 ch_col = PALETTE["text_tertiary"]
             h3["value"].setStyleSheet(f"color: {ch_col} !important;")
-            h3["sub"].setText("\u7e3d\u984d\u8f03\u6628\u65e5")
+            h3["sub"].setText(tr("dash.sub.vs_yday_total"))
         else:
             h3["value"].setText("\u2014")
             h3["value"].setStyleSheet(f"color: {PALETTE['text_tertiary']} !important;")
@@ -1588,7 +1829,8 @@ class SponsorMainWindow(QMainWindow):
                     cell["amount"].setText(f"{amt:,.0f} {cur}")
                     cell["amount"].setStyleSheet(f"color: {PALETTE['text']} !important;")
                     pc = int(p.get("patron_count") or 0)
-                    cell["patron"].setText(f"{pc} \u4eba")
+                    pp2 = tr("common.people")
+                    cell["patron"].setText(f"{pc} {pp2}".strip() if pp2 else str(pc))
                     cell["patron"].setStyleSheet(f"color: {PALETTE['text']} !important;")
                     if p.get("change_amount") is not None:
                         c3 = p["change_amount"]
@@ -1614,22 +1856,26 @@ class SponsorMainWindow(QMainWindow):
     def _apply_schedule_preferences(self):
         self.config = load_config()
         gui = self.config.get("gui") or {}
-        interval = gui.get("schedule_interval")
-        opts = ["15 \u5206\u9418", "30 \u5206\u9418", "1 \u5c0f\u6642", "2 \u5c0f\u6642", "4 \u5c0f\u6642"]
-        if interval and interval in opts and hasattr(self, "_sched_interval"):
-            self._sched_interval.setCurrentText(interval)
+        interval_id = normalize_schedule_interval_id(str(gui.get("schedule_interval") or "1h"))
+        if hasattr(self, "_sched_interval"):
+            self._rebuild_sched_interval_combo(interval_id)
         if gui.get("schedule_auto_start") and not self._schedule_running:
             self._start_schedule()
 
     def _save_schedule_preferences(self, running: bool):
         self.config = load_config()
-        self.config.setdefault("gui", {})["schedule_interval"] = self._sched_interval.currentText()
+        self.config.setdefault("gui", {})["schedule_interval"] = self._sched_interval_sid()
         self.config.setdefault("gui", {})["schedule_auto_start"] = running
         save_config(self.config)
 
-    def _on_schedule_interval_changed(self, _t=None):
+    def _on_schedule_interval_changed(self, _idx: int = 0) -> None:
+        if not hasattr(self, "_sched_interval"):
+            return
+        sid = self._sched_interval.currentData()
+        if not isinstance(sid, str):
+            return
         self.config = load_config()
-        self.config.setdefault("gui", {})["schedule_interval"] = self._sched_interval.currentText()
+        self.config.setdefault("gui", {})["schedule_interval"] = sid
         save_config(self.config)
 
     def _toggle_schedule(self):
@@ -1641,26 +1887,12 @@ class SponsorMainWindow(QMainWindow):
     def _start_schedule(self):
         import schedule as sched_mod
 
-        interval_map = {
-            "15 \u5206\u9418": 15,
-            "30 \u5206\u9418": 30,
-            "1 \u5c0f\u6642": 60,
-            "2 \u5c0f\u6642": 120,
-            "4 \u5c0f\u6642": 240,
-        }
-        minutes = interval_map.get(self._sched_interval.currentText(), 60)
+        minutes = SCHEDULE_INTERVAL_MINUTES.get(self._sched_interval_sid(), 60)
         sched_mod.clear()
         sched_mod.every(minutes).minutes.do(lambda: self._run_update(True))
         self._schedule_running = True
-        self._sched_btn.setText("\u505c\u6b62\u6392\u7a0b")
-        self._sched_btn.setObjectName("danger")
-        self._sched_btn.setStyleSheet(
-            f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
-            f"border-radius: 8px; font-weight: 600;"
-        )
         self._sched_interval.setEnabled(False)
-        self.update_status.setText(f"\u6392\u7a0b\u555f\u52d5\u4e2d\uff08\u6bcf {self._sched_interval.currentText()}\uff09")
-        self.update_status.setStyleSheet(f"color: {PALETTE['success']};")
+        self._refresh_schedule_button_and_status()
         self._save_schedule_preferences(True)
         if self._sched_thread is None or not self._sched_thread.is_alive():
 
@@ -1682,15 +1914,8 @@ class SponsorMainWindow(QMainWindow):
 
         sched_mod.clear()
         self._schedule_running = False
-        self._sched_btn.setText("\u555f\u52d5\u6392\u7a0b")
-        self._sched_btn.setObjectName("success")
-        self._sched_btn.setStyleSheet(
-            f"background-color: {PALETTE['success']}; color: #ffffff; border: none; "
-            f"border-radius: 8px; font-weight: 600;"
-        )
         self._sched_interval.setEnabled(True)
-        self.update_status.setText("\u6392\u7a0b\u5df2\u505c\u6b62")
-        self.update_status.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
+        self._refresh_schedule_button_and_status()
         self._save_schedule_preferences(False)
 
     def _run_update(self, from_schedule: bool = False):
@@ -1721,7 +1946,7 @@ class SponsorMainWindow(QMainWindow):
                     try:
                         url = pc.get("creator_page") or "https://www.patreon.com/c/user"
                         d = PatreonFetcher(pc["cookies"], url).fetch_sponsorship()
-                        return ("patreon", d, "\u7121\u6cd5\u53d6\u5f97\u6578\u64da" if not d else None)
+                        return ("patreon", d, tr("fetch.err.no_data") if not d else None)
                     except Exception as ex:
                         return ("patreon", None, str(ex))
 
@@ -1733,7 +1958,11 @@ class SponsorMainWindow(QMainWindow):
                         d = FanboxFetcher(fc["cookies"]).fetch_sponsorship()
                         if d and (d.get("amount") or 0) >= 1000:
                             return ("fanbox", d, None)
-                        return ("fanbox", None, "\u6578\u64da\u7570\u5e38" if d else "\u7121\u6cd5\u53d6\u5f97\u6578\u64da")
+                        return (
+                            "fanbox",
+                            None,
+                            tr("fetch.err.fanbox_bad") if d else tr("fetch.err.no_data"),
+                        )
                     except Exception as ex:
                         return ("fanbox", None, str(ex))
 
@@ -1743,7 +1972,7 @@ class SponsorMainWindow(QMainWindow):
                         return ("fantia", None, None)
                     try:
                         d = FantiaFetcher(fic["session_id"]).fetch_sponsorship()
-                        return ("fantia", d, "\u7121\u6cd5\u53d6\u5f97\u6578\u64da" if not d else None)
+                        return ("fantia", d, tr("fetch.err.no_data") if not d else None)
                     except Exception as ex:
                         return ("fantia", None, str(ex))
 
@@ -1782,7 +2011,8 @@ class SponsorMainWindow(QMainWindow):
 
     def _update_done(self, results, from_schedule: bool = False):
         self.update_btn.setEnabled(True)
-        self._last_update_lbl.setText(f"\u66f4\u65b0 {now_jst():%H:%M} JST")
+        self._last_update_time_jst = f"{now_jst():%H:%M}"
+        self._last_update_lbl.setText(tr("dash.updated", t=self._last_update_time_jst))
         s = None
         try:
             s = get_dashboard_stats()
@@ -1814,6 +2044,7 @@ class SponsorMainWindow(QMainWindow):
                     cfg = load_config()
                     url = ((cfg.get("gui") or {}).get("discord_webhook_url") or "").strip()
                     if url and is_discord_webhook_url(url):
+                        _lg = get_language()
                         msg = format_scheduled_increase_message(
                             time_jst=f"{now_jst():%Y-%m-%d %H:%M} JST",
                             new_total_jpy=float(new_total),
@@ -1822,10 +2053,11 @@ class SponsorMainWindow(QMainWindow):
                             platform_before=dict(platform_before),
                             by_platform=s.get("by_platform") or [],
                             fx_usd_jpy=s.get("fx_usd_jpy"),
+                            lang=_lg,
                         )
 
                         def _send_hook():
-                            post_discord_webhook(url, msg)
+                            post_discord_webhook(url, msg, lang=_lg)
 
                         threading.Thread(target=_send_hook, daemon=True).start()
                 except Exception:
@@ -1839,37 +2071,28 @@ class SponsorMainWindow(QMainWindow):
 
     def _update_fail(self, msg):
         self.update_btn.setEnabled(True)
-        QMessageBox.critical(self, "\u66f4\u65b0\u5931\u6557", msg or "\u672a\u77e5\u932f\u8aa4")
+        QMessageBox.critical(self, tr("update.fail.title"), msg or tr("update.fail.unknown"))
 
     def _msgbox_version_check_new_release(self, latest: str, ver_local: str) -> bool:
         """\u767c\u73fe\u8f03\u65b0\u7248\u672c\u6642\u8a62\u554f\u662f\u5426\u524d\u5f80\u4e0b\u8f09\u3002\u56de\u50b3 True \u8868\u793a\u958b\u555f\u700f\u89bd\u5668\u3002"""
         mb = QMessageBox(self)
-        mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+        mb.setWindowTitle(tr("ver.title"))
         mb.setIcon(QMessageBox.Icon.Question)
-        mb.setText(
-            f"\u767c\u73fe\u8f03\u65b0\u7684\u767c\u884c\u7248\u672c\uff1a<b>{html.escape(latest)}</b>"
-        )
+        mb.setText(tr("ver.new.body", latest=f"<b>{html.escape(latest)}</b>"))
         mb.setTextFormat(Qt.TextFormat.RichText)
-        mb.setInformativeText(
-            f"\u60a8\u6b64\u8655\u986f\u793a\u7684\u7248\u672c\u7de8\u865f\u70ba\uff1a{html.escape(ver_local)}\n\n"
-            "\u662f\u5426\u958b\u555f\u700f\u89bd\u5668\u524d\u5f80 GitHub Release \u4e0b\u8f09\u9801\u9762\uff1f"
-        )
-        btn_dl = mb.addButton("\u524d\u5f80\u4e0b\u8f09", QMessageBox.ButtonRole.AcceptRole)
-        mb.addButton("\u7a0d\u5f8c\u518d\u8aaa", QMessageBox.ButtonRole.RejectRole)
+        mb.setInformativeText(tr("ver.new.info", local=html.escape(ver_local)))
+        btn_dl = mb.addButton(tr("ver.download"), QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton(tr("ver.later"), QMessageBox.ButtonRole.RejectRole)
         mb.setDefaultButton(btn_dl)
         mb.exec()
         return mb.clickedButton() == btn_dl
 
     def _msgbox_version_check_uptodate(self, latest: str, ver_local: str) -> None:
         mb = QMessageBox(self)
-        mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+        mb.setWindowTitle(tr("ver.title"))
         mb.setIcon(QMessageBox.Icon.Information)
-        mb.setText("\u5df2\u70ba\u6700\u65b0\u7248\u672c")
-        mb.setInformativeText(
-            f"\u60a8\u4f7f\u7528\u7684\u7a0b\u5f0f\u7248\u672c\u5df2\u8207 GitHub \u4e0a\u6700\u65b0 Release \u4e00\u81f4\uff0c\u7121\u9700\u66f4\u65b0\u3002\n\n"
-            f"\u76ee\u524d\u7248\u672c\uff1a{ver_local}\n"
-            f"\u7dda\u4e0a\u6a19\u7c64\uff1a{latest}"
-        )
+        mb.setText(tr("ver.uptodate"))
+        mb.setInformativeText(tr("ver.uptodate.info", local=ver_local, latest=latest))
         mb.setStandardButtons(QMessageBox.StandardButton.Ok)
         mb.exec()
 
@@ -1880,16 +2103,16 @@ class SponsorMainWindow(QMainWindow):
         if not isinstance(payload, dict):
             QMessageBox.critical(
                 self,
-                "\u7248\u672c\u6aa2\u67e5",
-                f"\u5167\u90e8\u932f\u8aa4\uff08\u7121\u6548\u8f38\u51fa\uff09\uff1a{payload!r}",
+                tr("ver.title"),
+                tr("ver.err.internal", detail=f"{payload!r}"),
             )
             return
         if payload.get("exc"):
             detail = (payload.get("trace") or payload.get("exc") or "").strip()
             QMessageBox.critical(
                 self,
-                "\u7248\u672c\u6aa2\u67e5",
-                f"\u6aa2\u67e5\u6642\u767c\u751f\u932f\u8aa4\uff1a\n{detail}",
+                tr("ver.title"),
+                tr("ver.err.check", detail=detail),
             )
             return
 
@@ -1900,46 +2123,37 @@ class SponsorMainWindow(QMainWindow):
         latest = payload.get("latest")
         api_err = payload.get("api_err")
 
-        self._app_version_label.setText(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
+        self._app_version_label.setText(tr("settings.version.current", v=current_app_version()))
         ver_local = current_app_version()
 
         if has_git:
             if git_ok:
                 box = QMessageBox(self)
-                box.setWindowTitle("\u539f\u59cb\u78bc\u540c\u6b65")
+                box.setWindowTitle(tr("ver.git.title"))
                 box.setIcon(QMessageBox.Icon.Information)
-                box.setText(
-                    "\u7a0b\u5f0f\u539f\u59cb\u78bc\u5df2\u8207\u7dda\u4e0a\u5009\u5eab\u540c\u6b65\u3002\n"
-                    "\uff08\u82e5\u7121\u65b0\u7248\u672c\uff0c\u8868\u793a\u60a8\u5df2\u4f7f\u7528\u6700\u65b0\u5167\u5bb9\u3002\uff09"
-                )
+                box.setText(tr("ver.git.ok"))
                 box.exec()
             else:
-                QMessageBox.critical(self, "\u539f\u59cb\u78bc\u540c\u6b65", git_msg)
+                QMessageBox.critical(self, tr("ver.git.title"), git_msg)
 
         if not repo:
             if not has_git:
                 mb = QMessageBox(self)
-                mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+                mb.setWindowTitle(tr("ver.title"))
                 mb.setIcon(QMessageBox.Icon.Warning)
-                mb.setText("\u7121\u6cd5\u6aa2\u67e5\u66f4\u65b0")
-                mb.setInformativeText(
-                    "\u672a\u8a2d\u5b9a\u66f4\u65b0\u4f86\u6e90\uff0c\u6216\u672a\u4ee5 git \u53d6\u5f97\u5c08\u6848\u3002\n"
-                    "\u8acb\u806f\u7e6b\u767c\u884c\u65b9\u6216\u7dad\u8b77\u8005\u53d6\u5f97\u66f4\u65b0\u65b9\u5f0f\u3002"
-                )
+                mb.setText(tr("ver.no_repo"))
+                mb.setInformativeText(tr("ver.no_repo.info"))
                 mb.setStandardButtons(QMessageBox.StandardButton.Ok)
                 mb.exec()
             return
 
         if latest is None:
             mb = QMessageBox(self)
-            mb.setWindowTitle("\u7248\u672c\u6aa2\u67e5")
+            mb.setWindowTitle(tr("ver.title"))
             mb.setIcon(QMessageBox.Icon.Warning)
-            mb.setText("\u7121\u6cd5\u6bd4\u5c0d\u767c\u884c\u7248\u672c")
-            detail = (api_err or "").strip() or "\u7121\u6cd5\u9023\u7dda\u81f3 GitHub\u3002"
-            mb.setInformativeText(
-                f"{detail}\n\n"
-                "\u82e5\u5009\u5eab\u5c1a\u672a\u5efa\u7acb Release\uff0c\u5c07\u7121\u6cd5\u6bd4\u5c0d\u7248\u672c\u865f\u3002"
-            )
+            mb.setText(tr("ver.cmp_fail"))
+            detail = (api_err or "").strip() or tr("ver.cmp_fail.nodetail")
+            mb.setInformativeText(tr("ver.cmp_fail.info", detail=detail))
             mb.setStandardButtons(QMessageBox.StandardButton.Ok)
             mb.exec()
             return
@@ -1993,16 +2207,16 @@ class SponsorMainWindow(QMainWindow):
         if not lazy_update_supported():
             QMessageBox.information(
                 self,
-                "\u4e00\u9375\u66f4\u65b0",
-                "\u50c5\u9069\u7528\u65bc Windows \u4e0b\u4f7f\u7528\u514d\u5b89\u88dd exe \u6642\u3002",
+                tr("oneclick.title"),
+                tr("oneclick.win_only"),
             )
             return
         repo = configured_github_repo()
         if not repo:
             QMessageBox.warning(
                 self,
-                "\u4e00\u9375\u66f4\u65b0",
-                "\u672a\u8a2d\u5b9a GitHub \u5009\u5eab\uff08src/version.py GITHUB_REPO\uff09\u3002",
+                tr("oneclick.title"),
+                tr("oneclick.no_repo"),
             )
             return
         self._oneclick_busy = True
@@ -2028,7 +2242,7 @@ class SponsorMainWindow(QMainWindow):
                 if plan and plan.get("kind") == "update":
                     self._oneclick_check_done.emit({"ok": True, "uptodate": False, "plan": plan})
                     return
-                self._oneclick_check_done.emit({"ok": False, "error": "\u7121\u6548\u7684\u66f4\u65b0\u8cc7\u8a0a\u3002"})
+                self._oneclick_check_done.emit({"ok": False, "error": tr("oneclick.err.bad")})
             except Exception:
                 self._oneclick_check_done.emit(
                     {"ok": False, "error": traceback.format_exc()}
@@ -2046,8 +2260,8 @@ class SponsorMainWindow(QMainWindow):
             self._app_oneclick_btn.setEnabled(True)
             QMessageBox.critical(
                 self,
-                "\u4e00\u9375\u66f4\u65b0",
-                str(payload.get("error") or "\u672a\u77e5\u932f\u8aa4"),
+                tr("oneclick.title"),
+                str(payload.get("error") or tr("oneclick.err.unknown")),
             )
             return
         if payload.get("uptodate"):
@@ -2055,8 +2269,8 @@ class SponsorMainWindow(QMainWindow):
             self._app_oneclick_btn.setEnabled(True)
             QMessageBox.information(
                 self,
-                "\u4e00\u9375\u66f4\u65b0",
-                f"\u5df2\u662f\u6700\u65b0\u7248\u672c\uff08{str(payload.get('latest') or '')}\uff09\u3002",
+                tr("oneclick.title"),
+                tr("oneclick.err.info", tag=str(payload.get("latest") or "")),
             )
             return
         plan = payload.get("plan")
@@ -2066,14 +2280,13 @@ class SponsorMainWindow(QMainWindow):
             return
         latest = str(plan.get("latest") or "")
         size = int(plan.get("size") or 0)
-        size_txt = f"\u7d04 {size / (1024 * 1024):.1f} MB" if size > 0 else "\u5927\u5c0f\u672a\u77e5"
+        size_txt = (
+            tr("oneclick.size_mb", mb=size / (1024 * 1024)) if size > 0 else tr("oneclick.size_unknown")
+        )
         q = QMessageBox.question(
             self,
-            "\u4e00\u9375\u66f4\u65b0",
-            f"\u5075\u6e2c\u5230\u65b0\u7248\u672c\uff1a{latest}\uff08{size_txt}\uff09\u3002\n\n"
-            f"\u5c07\u4e0b\u8f09\u4e26\u8986\u5beb\u7a0b\u5f0f\u6a94\u6848\uff0c\u60a8\u7684\u8a2d\u5b9a\uff08config.yaml \u8207\u8cc7\u6599\u5eab\uff09\u6703\u4fdd\u7559\u3002\n"
-            f"\u7a0b\u5f0f\u5c07\u95dc\u9589\u5f8c\u81ea\u52d5\u5b8c\u6210\u4e26\u91cd\u958b\u3002\n\n"
-            f"\u662f\u5426\u7e7c\u7e8c\uff1f",
+            tr("oneclick.title"),
+            tr("oneclick.ask", latest=latest, size=size_txt),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -2088,16 +2301,16 @@ class SponsorMainWindow(QMainWindow):
         if not url:
             self._oneclick_busy = False
             self._app_oneclick_btn.setEnabled(True)
-            QMessageBox.warning(self, "\u4e00\u9375\u66f4\u65b0", "\u7121\u4e0b\u8f09\u7db2\u5740\u3002")
+            QMessageBox.warning(self, tr("oneclick.title"), tr("oneclick.no_url"))
             return
         self._oneclick_prog = QProgressDialog(
-            "\u4e0b\u8f09\u66f4\u65b0\u4e2d\u2026",
+            tr("oneclick.downloading"),
             None,
             0,
             100,
             self,
         )
-        self._oneclick_prog.setWindowTitle("\u4e00\u9375\u66f4\u65b0")
+        self._oneclick_prog.setWindowTitle(tr("oneclick.title"))
         self._oneclick_prog.setWindowModality(Qt.WindowModality.WindowModal)
         self._oneclick_prog.setMinimumDuration(0)
         self._oneclick_prog.setCancelButton(None)
@@ -2150,23 +2363,23 @@ class SponsorMainWindow(QMainWindow):
         if not isinstance(payload, dict) or not payload.get("ok"):
             QMessageBox.critical(
                 self,
-                "\u4e00\u9375\u66f4\u65b0",
-                str((payload or {}).get("error") or "\u4e0b\u8f09\u5931\u6557"),
+                tr("oneclick.title"),
+                str((payload or {}).get("error") or tr("oneclick.dl_fail")),
             )
             return
         staging_s = str(payload.get("staging") or "").strip()
         work_s = str(payload.get("work_root") or "").strip()
         if not staging_s or not work_s:
-            QMessageBox.critical(self, "\u4e00\u9375\u66f4\u65b0", "\u5167\u90e8\u8def\u5f91\u7121\u6548\u3002")
+            QMessageBox.critical(self, tr("oneclick.title"), tr("oneclick.path_invalid"))
             return
         QMessageBox.information(
             self,
-            "\u4e00\u9375\u66f4\u65b0",
-            "\u4e0b\u8f09\u5b8c\u6210\u3002\u6309\u300c\u78ba\u5b9a\u300d\u5f8c\u5c07\u95dc\u9589\u7a0b\u5f0f\u4e26\u5957\u7528\u66f4\u65b0\uff0c\u7136\u5f8c\u81ea\u52d5\u91cd\u958b\u3002",
+            tr("oneclick.title"),
+            tr("oneclick.done"),
         )
         ok, msg = spawn_lazy_windows_updater(Path(staging_s), Path(work_s))
         if not ok:
-            QMessageBox.critical(self, "\u4e00\u9375\u66f4\u65b0", msg or "\u7121\u6cd5\u555f\u52d5\u66f4\u65b0\u52a9\u624b")
+            QMessageBox.critical(self, tr("oneclick.title"), msg or tr("oneclick.spawn_fail"))
             return
         self._quit_fully()
 
@@ -2175,32 +2388,63 @@ class SponsorMainWindow(QMainWindow):
         return bool(checked)
 
     def _add_settings_group(
-        self, column: QVBoxLayout, title: str, blurb: str | None = None
+        self, column: QVBoxLayout, title_key: str, blurb_key: str | None = None
     ) -> None:
-        t = QLabel(title)
+        t = QLabel(tr(title_key))
         t.setObjectName("settingsHeadline")
         column.addWidget(t)
-        if blurb:
-            b = QLabel(blurb)
+        self._settings_i18n_headings.append((t, title_key))
+        if blurb_key:
+            b = QLabel(tr(blurb_key))
             b.setObjectName("settingsBlurb")
             b.setWordWrap(True)
             column.addWidget(b)
+            self._settings_i18n_blurbs.append((b, blurb_key))
 
     def _build_settings_scroll_content(self, left: QVBoxLayout, right: QVBoxLayout):
         inner = getattr(self, "_settings_inner", None)
         card_parent = inner if inner is not None else self
         gui_sound = self.config.get("gui") or {}
+        self._settings_i18n_headings.clear()
+        self._settings_i18n_blurbs.clear()
 
-        self._add_settings_group(left, "\u66f4\u65b0\u8207\u6392\u7a0b")
+        self._add_settings_group(left, "settings.lang", "settings.lang_hint")
+        lang_card = _make_settings_group_card(card_parent)
+        lang_l = QVBoxLayout(lang_card)
+        lang_l.setContentsMargins(14, 12, 14, 12)
+        lang_l.setSpacing(8)
+        self._ui_lang_combo = QComboBox()
+        _lang_pairs = (
+            ("auto", "lang.auto"),
+            (LANG_ZH_TW, "lang.zh_TW"),
+            (LANG_EN, "lang.en"),
+            (LANG_JA, "lang.ja"),
+        )
+        for _val, lk in _lang_pairs:
+            self._ui_lang_combo.addItem(tr(lk), _val)
+        raw_ui = str(gui_sound.get("ui_language", "auto")).strip().lower()
+        _sel_lang = (
+            "auto" if raw_ui in ("auto", "", "system") else normalize_ui_language_raw(raw_ui)
+        )
+        with QSignalBlocker(self._ui_lang_combo):
+            for _i in range(self._ui_lang_combo.count()):
+                if self._ui_lang_combo.itemData(_i) == _sel_lang:
+                    self._ui_lang_combo.setCurrentIndex(_i)
+                    break
+        self._ui_lang_combo.currentIndexChanged.connect(self._on_ui_language_changed)
+        lang_l.addWidget(self._ui_lang_combo)
+        left.addWidget(lang_card)
+
+        self._add_settings_group(left, "settings.group.sync")
         sync_card = _make_settings_group_card(card_parent)
         sl = QVBoxLayout(sync_card)
         sl.setContentsMargins(14, 12, 14, 12)
         sl.setSpacing(10)
-        self.update_btn = QPushButton("\u6293\u53d6\u8d0a\u52a9\u6578\u64da")
+        self.update_btn = QPushButton(tr("settings.fetch"))
         self.update_btn.setObjectName("primary")
         self.update_btn.clicked.connect(self._run_update)
         self.update_btn.setMinimumHeight(38)
-        self._sched_btn = QPushButton("\u555f\u52d5\u6392\u7a0b")
+        self._sched_btn = QPushButton(tr("settings.sched.start"))
         self._sched_btn.setObjectName("success")
         self._sched_btn.setMinimumHeight(38)
         self._sched_btn.clicked.connect(self._toggle_schedule)
@@ -2210,12 +2454,13 @@ class SponsorMainWindow(QMainWindow):
         row_sync.addWidget(self._sched_btn, 1)
         sl.addLayout(row_sync)
         row_iv = QHBoxLayout()
-        row_iv.addWidget(_settings_form_label("\u6392\u7a0b\u9593\u9694"), 0)
+        self._lbl_sched_interval = _settings_form_label(tr("settings.sched.interval"))
+        row_iv.addWidget(self._lbl_sched_interval, 0)
         self._sched_interval = QComboBox()
-        for v in ["15 \u5206\u9418", "30 \u5206\u9418", "1 \u5c0f\u6642", "2 \u5c0f\u6642", "4 \u5c0f\u6642"]:
-            self._sched_interval.addItem(v)
-        self._sched_interval.setCurrentText("1 \u5c0f\u6642")
-        self._sched_interval.currentTextChanged.connect(self._on_schedule_interval_changed)
+        self._sched_interval.currentIndexChanged.connect(self._on_schedule_interval_changed)
+        self._rebuild_sched_interval_combo(
+            normalize_schedule_interval_id(str(gui_sound.get("schedule_interval") or "1h"))
+        )
         row_iv.addWidget(self._sched_interval, 1)
         sl.addLayout(row_iv)
         self.update_status = QLabel("")
@@ -2223,57 +2468,47 @@ class SponsorMainWindow(QMainWindow):
         self.update_status.setWordWrap(True)
         sl.addWidget(self.update_status)
         left.addWidget(sync_card)
+        self._refresh_schedule_button_and_status()
 
-        self._add_settings_group(
-            left,
-            "\u7a0b\u5f0f\u7248\u672c",
-            "\u82e5\u767c\u73fe\u7121\u6cd5\u6b63\u5e38\u5237\u65b0\u6578\u64da\uff0c\u8acb\u5617\u8a66\u6aa2\u67e5\u66f4\u65b0\uff1b"
-            "\u82e5\u7248\u672c\u5c1a\u672a\u66f4\u65b0\uff0c\u8acb\u7b49\u5f85\u958b\u767c\u8005\u66f4\u65b0\u7a0b\u5f0f\u7248\u672c\u3002",
-        )
+        self._add_settings_group(left, "settings.group.version", "settings.version.blurb")
         ver_card = _make_settings_group_card(card_parent)
         vl = QVBoxLayout(ver_card)
         vl.setContentsMargins(14, 12, 14, 12)
         vl.setSpacing(10)
-        self._app_version_label = QLabel(f"\u76ee\u524d\u7248\u672c\uff1a {current_app_version()}")
+        self._app_version_label = QLabel(tr("settings.version.current", v=current_app_version()))
         self._app_version_label.setObjectName("settingsFormLabel")
         vl.addWidget(self._app_version_label)
         ver_btn_row = QHBoxLayout()
         ver_btn_row.setSpacing(8)
-        self._app_update_btn = QPushButton("\u6aa2\u67e5\u66f4\u65b0")
+        self._app_update_btn = QPushButton(tr("settings.update.check"))
         self._app_update_btn.setMinimumHeight(36)
         self._app_update_btn.clicked.connect(self._on_app_update_clicked)
         ver_btn_row.addWidget(self._app_update_btn, 1)
-        self._app_oneclick_btn = QPushButton("\u4e00\u9375\u66f4\u65b0\u7a0b\u5f0f")
+        self._app_oneclick_btn = QPushButton(tr("settings.update.oneclick"))
         self._app_oneclick_btn.setMinimumHeight(36)
         self._app_oneclick_btn.clicked.connect(self._on_oneclick_update_clicked)
         if not lazy_update_supported():
             self._app_oneclick_btn.setEnabled(False)
-            self._app_oneclick_btn.setToolTip(
-                "\u50c5\u9069\u7528 Windows \u514d\u5b89\u88dd exe\uff1b\u958b\u767c\u6a21\u5f0f\u8acb\u7528\u300c\u6aa2\u67e5\u66f4\u65b0\u300d\u6216 git\u3002"
-            )
+            self._app_oneclick_btn.setToolTip(tr("settings.update.oneclick_tip"))
         ver_btn_row.addWidget(self._app_oneclick_btn, 1)
         vl.addLayout(ver_btn_row)
         left.addWidget(ver_card)
 
-        self._add_settings_group(left, "\u5e73\u53f0\u767b\u5165")
+        self._add_settings_group(left, "settings.group.accounts")
         acc_card = _make_settings_group_card(card_parent)
         acc_l = QVBoxLayout(acc_card)
         acc_l.setContentsMargins(0, 2, 0, 2)
         acc_l.setSpacing(0)
-        _plat_hint = QLabel(
-            "Google\u3001X\uff08Twitter\uff09\u7b49\u7db2\u7ad9\u53ef\u80fd\u9650\u5236\u6b64\u7a2e\u81ea\u52d5\u958b\u555f\u7684\u767b\u5165\u65b9\u5f0f\uff1b"
-            "\u8acb\u6539\u5728\u7db2\u9801\u4ee5\u5e33\u865f\u5bc6\u78bc\u6216\u901a\u884c\u91d1\u9470\u5b8c\u6210\u767b\u5165\u3002\n"
-            "\u767b\u5165\u5b8c\u6210\u5f8c\u8acb\u56de\u5230\u672c\u7a0b\u5f0f\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
-        )
-        _plat_hint.setWordWrap(True)
-        _plat_hint.setObjectName("settingsFormLabel")
-        _plat_hint.setStyleSheet(
+        self._plat_hint_label = QLabel(tr("settings.platform.hint"))
+        self._plat_hint_label.setWordWrap(True)
+        self._plat_hint_label.setObjectName("settingsFormLabel")
+        self._plat_hint_label.setStyleSheet(
             f"font-size: 14px !important; "
             f"padding: 12px 14px; margin: 8px 12px 0 12px; "
             f"background-color: {PALETTE['bg_elevated']}; "
             f"border-left: 3px solid {PALETTE['accent']}; border-radius: 6px;"
         )
-        acc_l.addWidget(_plat_hint)
+        acc_l.addWidget(self._plat_hint_label)
         _plat_div = QFrame()
         _plat_div.setObjectName("settingsDivider")
         _plat_div.setFixedHeight(1)
@@ -2303,8 +2538,11 @@ class SponsorMainWindow(QMainWindow):
             if key in ("patreon", "fanbox"):
                 logged = bool((cfg.get("cookies") or "").strip() and "xxx" not in (cfg.get("cookies") or ""))
             else:
-                logged = bool((cfg.get("session_id") or "").strip() and "\u4f60\u7684" not in (cfg.get("session_id") or ""))
-            st = QLabel("\u5df2\u767b\u5165" if logged else "\u672a\u767b\u5165")
+                _sid = (cfg.get("session_id") or "").strip()
+                logged = bool(_sid) and "\u4f60\u7684" not in _sid and not _sid.lower().startswith(
+                    "your "
+                )
+            st = QLabel(tr("settings.account.in") if logged else tr("settings.account.out"))
             st.setStyleSheet(f"color: {PALETTE['success'] if logged else PALETTE['text_tertiary']};")
             st.setToolTip("")
             top.addStretch()
@@ -2318,18 +2556,18 @@ class SponsorMainWindow(QMainWindow):
                 rl.addWidget(desc_l)
             bl = QHBoxLayout()
             bl.setSpacing(8)
-            btn = QPushButton("\u767b\u5165")
+            btn = QPushButton(tr("settings.login"))
             btn.setStyleSheet(
                 f"background-color: {color}; color: #ffffff; border: none; "
                 f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
             )
             btn.clicked.connect(getattr(self, f"_{key}_login_start"))
             setattr(self, f"{key}_btn", btn)
-            done_btn = QPushButton("\u5df2\u5b8c\u6210")
+            done_btn = QPushButton(tr("settings.done"))
             done_btn.setEnabled(False)
             done_btn.clicked.connect(getattr(self, f"_{key}_login_done"))
             setattr(self, f"{key}_done_btn", done_btn)
-            logout_btn = QPushButton("\u767b\u51fa")
+            logout_btn = QPushButton(tr("settings.logout"))
             logout_btn.clicked.connect(partial(self._platform_login_logout, key))
             setattr(self, f"{key}_logout_btn", logout_btn)
             bl.addWidget(btn)
@@ -2344,33 +2582,29 @@ class SponsorMainWindow(QMainWindow):
             for key in ("patreon", "fanbox", "fantia"):
                 getattr(self, f"{key}_btn").setEnabled(False)
                 getattr(self, f"{key}_logout_btn").setEnabled(False)
-            w = QLabel("Playwright \u672a\u5b89\u88dd\uff1aplaywright install chromium")
-            w.setStyleSheet(f"color: {PALETTE['warning']};")
-            left.addWidget(w)
+            self._lbl_playwright_miss = QLabel(tr("settings.playwright.missing"))
+            self._lbl_playwright_miss.setStyleSheet(f"color: {PALETTE['warning']};")
+            left.addWidget(self._lbl_playwright_miss)
 
-        self._add_settings_group(right, "\u901a\u77e5\u97f3\u6548")
-        preset_key = normalize_increase_sound_key(gui_sound.get("increase_sound"))
-        preset_label = _INCREASE_SOUND_KEY_TO_LABEL.get(
-            preset_key, _INCREASE_SOUND_KEY_TO_LABEL["asterisk"]
-        )
+        self._add_settings_group(right, "settings.group.sound")
         sound_card = _make_settings_group_card(card_parent)
         sil = QVBoxLayout(sound_card)
         sil.setContentsMargins(14, 12, 14, 12)
         sil.setSpacing(10)
         r1 = QHBoxLayout()
-        r1.addWidget(_settings_form_label("\u7cfb\u7d71\u97f3\u6548"), 0)
+        self._lbl_sound_system = _settings_form_label(tr("settings.sound.system"))
+        r1.addWidget(self._lbl_sound_system, 0)
         self._increase_sound_preset = QComboBox()
-        for lab in INCREASE_SOUND_PRESET_LABELS:
-            self._increase_sound_preset.addItem(lab)
-        self._increase_sound_preset.setCurrentText(preset_label)
-        self._increase_sound_preset.currentTextChanged.connect(self._on_increase_sound_preset_changed)
+        self._increase_sound_preset.currentIndexChanged.connect(self._on_increase_sound_preset_changed)
+        self._rebuild_sound_preset_combo(gui_sound.get("increase_sound"))
         r1.addWidget(self._increase_sound_preset, 1)
-        test_snd = QPushButton("\u8a66\u807d")
-        test_snd.clicked.connect(self._test_increase_sound)
-        r1.addWidget(test_snd)
+        self._btn_sound_test = QPushButton(tr("settings.sound.test"))
+        self._btn_sound_test.clicked.connect(self._test_increase_sound)
+        r1.addWidget(self._btn_sound_test)
         sil.addLayout(r1)
         vr = QHBoxLayout()
-        vr.addWidget(_settings_form_label("\u97f3\u91cf"), 0)
+        self._lbl_sound_volume = _settings_form_label(tr("settings.sound.volume"))
+        vr.addWidget(self._lbl_sound_volume, 0)
         self._sound_volume_slider = QSlider(Qt.Orientation.Horizontal)
         self._sound_volume_slider.setRange(0, 100)
         _v0 = int(float(gui_sound.get("increase_sound_volume", 100)))
@@ -2380,36 +2614,38 @@ class SponsorMainWindow(QMainWindow):
         self._sound_volume_lbl = QLabel(f"{_v0}%")
         vr.addWidget(self._sound_volume_lbl)
         sil.addLayout(vr)
-        sil.addWidget(_settings_form_label("\u81ea\u8a02 WAV \u8def\u5f91\uff08\u9078\u586b\uff09"))
+        self._lbl_sound_wav = _settings_form_label(tr("settings.sound.wav"))
+        sil.addWidget(self._lbl_sound_wav)
         self._increase_sound_wav_entry = QLineEdit()
         self._increase_sound_wav_entry.setText(gui_sound.get("increase_sound_wav") or "")
         self._increase_sound_wav_entry.editingFinished.connect(self._on_increase_sound_wav_done)
         sil.addWidget(self._increase_sound_wav_entry)
         right.addWidget(sound_card)
 
-        self._add_settings_group(right, "Discord \u901a\u77e5")
+        self._add_settings_group(right, "settings.group.discord")
         dc = _make_settings_group_card(card_parent)
         dcl = QVBoxLayout(dc)
         dcl.setContentsMargins(14, 12, 14, 12)
         dcl.setSpacing(10)
-        dcl.addWidget(_settings_form_label("Webhook URL"))
+        dcl.addWidget(_settings_form_label(tr("settings.discord.url")))
         self._discord_webhook_entry = QLineEdit()
         self._discord_webhook_entry.setPlaceholderText("https://discord.com/api/webhooks/...")
         self._discord_webhook_entry.setText(gui_sound.get("discord_webhook_url") or "")
         self._discord_webhook_entry.editingFinished.connect(self._on_discord_webhook_done)
         dcl.addWidget(self._discord_webhook_entry)
         dbtn = QHBoxLayout()
-        tdisc = QPushButton("\u6e2c\u8a66\u50b3\u9001")
-        tdisc.clicked.connect(self._test_discord_webhook)
-        dbtn.addWidget(tdisc)
+        self._btn_discord_test = QPushButton(tr("settings.discord.test"))
+        self._btn_discord_test.clicked.connect(self._test_discord_webhook)
+        dbtn.addWidget(self._btn_discord_test)
         dbtn.addStretch()
         dcl.addLayout(dbtn)
-        self._sw_daily_report = QCheckBox("\u6bcf\u65e5\u5b9a\u6642\u50b3\u9001\u7e3d\u89bd\u5831\u8868\uff08\u65e5\u672c\u6642\u9593 JST\uff09")
+        self._sw_daily_report = QCheckBox(tr("settings.discord.daily"))
         self._sw_daily_report.setChecked(bool(gui_sound.get("daily_report_enabled")))
         self._sw_daily_report.toggled.connect(self._on_daily_report_switch)
         dcl.addWidget(self._sw_daily_report)
         dtr = QHBoxLayout()
-        dtr.addWidget(_settings_form_label("\u6bcf\u65e5\u50b3\u9001\u6642\u9593"), 0)
+        self._lbl_discord_time = _settings_form_label(tr("settings.discord.time"))
+        dtr.addWidget(self._lbl_discord_time, 0)
         self._daily_report_time_entry = QLineEdit()
         _drt = gui_sound.get("daily_report_time_jst") or "09:00"
         _parsed_drt = parse_jst_hhmm(str(_drt))
@@ -2418,36 +2654,32 @@ class SponsorMainWindow(QMainWindow):
         self._daily_report_time_entry.setText(_drt)
         self._daily_report_time_entry.editingFinished.connect(self._on_daily_report_time_done)
         dtr.addWidget(self._daily_report_time_entry, 1)
-        tdr = QPushButton("\u50b3\u9001\u7e3d\u89bd\u6e2c\u8a66")
-        tdr.clicked.connect(self._test_discord_daily_report)
-        dtr.addWidget(tdr)
+        self._btn_discord_report_test = QPushButton(tr("settings.discord.test_report"))
+        self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
+        dtr.addWidget(self._btn_discord_report_test)
         dcl.addLayout(dtr)
         right.addWidget(dc)
 
-        self._add_settings_group(right, "\u7cfb\u7d71\u532f\u8207\u8996\u7a97")
+        self._add_settings_group(right, "settings.group.tray")
         tray_card = _make_settings_group_card(card_parent)
         tl = QVBoxLayout(tray_card)
         tl.setContentsMargins(14, 12, 14, 12)
         tl.setSpacing(8)
-        self._sw_close_tray = QCheckBox(
-            "\u95dc\u9589\u8996\u7a97\u6642\u7e2e\u5230\u7cfb\u7d71\u532f\uff08\u95dc\u9589\u5247\u7d50\u675f\u7a0b\u5f0f\uff09"
-        )
+        self._sw_close_tray = QCheckBox(tr("settings.tray.close"))
         self._sw_close_tray.setChecked(self._close_to_tray)
         self._sw_close_tray.toggled.connect(self._on_switch_close_to_tray)
-        self._sw_min_tray = QCheckBox("\u6700\u5c0f\u5316\u6642\u7e2e\u5230\u7cfb\u7d71\u532f")
+        self._sw_min_tray = QCheckBox(tr("settings.tray.min"))
         self._sw_min_tray.setChecked(self._minimize_to_tray)
         self._sw_min_tray.toggled.connect(self._on_switch_minimize_to_tray)
-        self._sw_start_tray = QCheckBox("\u555f\u52d5\u6642\u53ea\u986f\u793a\u7cfb\u7d71\u532f\uff08\u4e3b\u8996\u7a97\u5148\u96b1\u85cf\uff09")
+        self._sw_start_tray = QCheckBox(tr("settings.tray.start"))
         self._sw_start_tray.setChecked(self._start_minimized_to_tray)
         self._sw_start_tray.toggled.connect(self._on_switch_start_tray)
-        self._sw_autostart = QCheckBox(
-            "\u958b\u6a5f\u6642\u81ea\u52d5\u555f\u52d5\u7a0b\u5f0f\uff08\u50c5 Windows\uff09"
-        )
+        self._sw_autostart = QCheckBox(tr("settings.tray.autostart"))
         with QSignalBlocker(self._sw_autostart):
             self._sw_autostart.setChecked(self._start_with_windows)
         if sys.platform != "win32":
             self._sw_autostart.setEnabled(False)
-            self._sw_autostart.setToolTip("\u50c5 Windows \u652f\u63f4\u958b\u6a5f\u81ea\u52d5")
+            self._sw_autostart.setToolTip(tr("settings.tray.autostart_tip"))
         self._sw_autostart.toggled.connect(self._on_switch_autostart)
         for w in (self._sw_close_tray, self._sw_min_tray, self._sw_start_tray, self._sw_autostart):
             tl.addWidget(w)
@@ -2457,22 +2689,18 @@ class SponsorMainWindow(QMainWindow):
             self._sw_start_tray.setEnabled(False)
         right.addWidget(tray_card)
 
-        self._add_settings_group(
-            right,
-            "\u8cc7\u6599\u6e05\u9664",
-            "\u522a\u9664\u6240\u6709\u5e73\u53f0\u7684\u767b\u5165\u8cc7\u6599\uff0c\u4e26\u6e05\u7a7a\u8cc7\u6599\u5eab\u5167\u7684\u66f4\u65b0\u8a18\u9304\uff08\u8d0a\u52a9\u984d\u6b77\u53f2\u8207\u6bcf\u65e5\u6458\u8981\uff09\u3002",
-        )
+        self._add_settings_group(right, "settings.group.purge", "settings.purge.blurb")
         purge_card = _make_settings_group_card(card_parent)
         pr = QVBoxLayout(purge_card)
         pr.setContentsMargins(14, 12, 14, 12)
         pr.setSpacing(10)
-        purge_btn = QPushButton("\u5fb9\u5e95\u6e05\u9664\u767b\u5165\u8207\u66f4\u65b0\u8a18\u9304")
-        purge_btn.setStyleSheet(
+        self._purge_btn = QPushButton(tr("settings.purge.btn"))
+        self._purge_btn.setStyleSheet(
             f"background-color: {PALETTE['error']}; color: #ffffff; border: none; "
             f"border-radius: 10px; font-weight: 600; padding: 8px 18px;"
         )
-        purge_btn.clicked.connect(self._master_clear_login_and_history)
-        pr.addWidget(purge_btn)
+        self._purge_btn.clicked.connect(self._master_clear_login_and_history)
+        pr.addWidget(self._purge_btn)
         right.addWidget(purge_card)
 
         left.addStretch(1)
@@ -2506,7 +2734,14 @@ class SponsorMainWindow(QMainWindow):
 
         ok, msg = apply_start_with_windows(self._start_with_windows)
         if not ok and msg:
-            QMessageBox.warning(self, "\u958b\u6a5f\u81ea\u52d5", msg)
+            if msg.startswith("REG:"):
+                detail = msg[4:]
+                body = tr("win.err.registry", e=detail)
+            elif msg == "LAUNCH":
+                body = tr("win.err.launch")
+            else:
+                body = msg
+            QMessageBox.warning(self, tr("autostart.fail.title"), body)
 
     def _on_sound_volume_slider(self, v):
         self._sound_volume_lbl.setText(f"{int(v)}%")
@@ -2523,9 +2758,12 @@ class SponsorMainWindow(QMainWindow):
         self.config.setdefault("gui", {})["increase_sound_volume"] = val
         save_config(self.config)
 
-    def _on_increase_sound_preset_changed(self, label: str):
+    def _on_increase_sound_preset_changed(self, _idx: int = 0) -> None:
+        key = self._increase_sound_preset.currentData()
+        if not isinstance(key, str):
+            return
         self.config = load_config()
-        self.config.setdefault("gui", {})["increase_sound"] = _INCREASE_SOUND_LABEL_TO_KEY.get(label, "asterisk")
+        self.config.setdefault("gui", {})["increase_sound"] = key
         save_config(self.config)
 
     def _on_increase_sound_wav_done(self):
@@ -2536,7 +2774,7 @@ class SponsorMainWindow(QMainWindow):
     def _test_increase_sound(self):
         snap = load_config()
         gui = snap.setdefault("gui", {})
-        key = _INCREASE_SOUND_LABEL_TO_KEY.get(self._increase_sound_preset.currentText(), "asterisk")
+        key = self._increase_sound_preset.currentData() or "asterisk"
         gui["increase_sound"] = key
         if key == "alert_bundle":
             gui["increase_sound_wav"] = ""
@@ -2553,24 +2791,28 @@ class SponsorMainWindow(QMainWindow):
     def _test_discord_webhook(self):
         url = self._discord_webhook_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "Discord Webhook", "\u8acb\u5148\u8cbc\u4e0a Webhook \u7db2\u5740\u3002")
+            QMessageBox.warning(self, tr("discord.title"), tr("discord.need_url"))
             return
         if not is_discord_webhook_url(url):
             QMessageBox.critical(
                 self,
-                "Discord Webhook",
-                "\u7db2\u5740\u683c\u5f0f\u4e0d\u7b26\uff08\u9808\u70ba https://discord.com/api/webhooks/\u2026 \uff09\u3002",
+                tr("discord.title"),
+                tr("discord.bad_url"),
             )
             return
+        _msg = tr("discord.test.msg")
+        _lg = get_language()
 
         def _run():
-            ok, err = post_discord_webhook(url, "\u3010\u8d0a\u52a9\u984d\u8ffd\u8e64\u3011\u6e2c\u8a66\uff1aWebhook \u9023\u7dda\u6210\u529f")
+            ok, err = post_discord_webhook(url, _msg, lang=_lg)
 
             def _done():
                 if ok:
-                    QMessageBox.information(self, "Discord Webhook", "\u5df2\u9001\u51fa\u6e2c\u8a66\u8a0a\u606f\u3002")
+                    QMessageBox.information(self, tr("discord.title"), tr("discord.test.ok"))
                 else:
-                    QMessageBox.critical(self, "Discord Webhook", f"\u9001\u51fa\u5931\u6557\uff1a{err or ''}")
+                    QMessageBox.critical(
+                        self, tr("discord.title"), tr("discord.test.fail", err=err or "")
+                    )
 
             QTimer.singleShot(0, _done)
 
@@ -2593,11 +2835,12 @@ class SponsorMainWindow(QMainWindow):
     def _test_discord_daily_report(self):
         url = self._discord_webhook_entry.text().strip()
         if not url:
-            QMessageBox.warning(self, "\u7e3d\u89bd\u5831\u8868", "\u8acb\u5148\u8cbc\u4e0a Webhook \u7db2\u5740\u3002")
+            QMessageBox.warning(self, tr("discord.report.title"), tr("discord.need_url"))
             return
         if not is_discord_webhook_url(url):
-            QMessageBox.critical(self, "\u7e3d\u89bd\u5831\u8868", "\u7db2\u5740\u683c\u5f0f\u4e0d\u7b26\u3002")
+            QMessageBox.critical(self, tr("discord.report.title"), tr("discord.bad_url"))
             return
+        _lg = get_language()
 
         def _run():
             try:
@@ -2606,7 +2849,9 @@ class SponsorMainWindow(QMainWindow):
             except Exception as ex:
 
                 def _fail():
-                    QMessageBox.critical(self, "\u7e3d\u89bd\u5831\u8868", f"\u8b80\u53d6\u5931\u6557\uff1a{ex}")
+                    QMessageBox.critical(
+                        self, tr("discord.report.title"), tr("discord.report.read_fail", ex=ex)
+                    )
 
                 QTimer.singleShot(0, _fail)
                 return
@@ -2614,14 +2859,17 @@ class SponsorMainWindow(QMainWindow):
                 s,
                 period,
                 time_jst=f"{now_jst():%Y-%m-%d %H:%M} JST",
+                lang=_lg,
             )
-            ok, err = post_discord_webhook_long(url, text)
+            ok, err = post_discord_webhook_long(url, text, lang=_lg)
 
             def _done():
                 if ok:
-                    QMessageBox.information(self, "\u7e3d\u89bd\u5831\u8868", "\u5df2\u9001\u51fa\u3002")
+                    QMessageBox.information(self, tr("discord.report.title"), tr("discord.report.sent"))
                 else:
-                    QMessageBox.critical(self, "\u7e3d\u89bd\u5831\u8868", f"\u5931\u6557\uff1a{err or ''}")
+                    QMessageBox.critical(
+                        self, tr("discord.report.title"), tr("discord.report.send_fail", err=err or "")
+                    )
 
             QTimer.singleShot(0, _done)
 
@@ -2659,12 +2907,14 @@ class SponsorMainWindow(QMainWindow):
                     period = get_period_comparison(7)
                 except Exception:
                     continue
+                _lg = effective_ui_language(cfg)
                 text = format_daily_dashboard_report(
                     s,
                     period,
                     time_jst=f"{now:%Y-%m-%d %H:%M} JST",
+                    lang=_lg,
                 )
-                ok, _ = post_discord_webhook_long(url, text)
+                ok, _ = post_discord_webhook_long(url, text, lang=_lg)
                 if ok:
                     self._last_daily_report_sent_jst_date = d
             except Exception:
@@ -2683,7 +2933,7 @@ class SponsorMainWindow(QMainWindow):
         if persist:
             save_config(self.config)
         st = getattr(self, f"{key}_status")
-        st.setText("\u672a\u767b\u5165")
+        st.setText(tr("settings.account.out"))
         st.setStyleSheet(f"color: {PALETTE['text_tertiary']};")
         st.setToolTip("")
         getattr(self, f"{key}_btn").setEnabled(True)
@@ -2695,8 +2945,8 @@ class SponsorMainWindow(QMainWindow):
     def _master_clear_login_and_history(self) -> None:
         r = QMessageBox.question(
             self,
-            "\u78ba\u8a8d",
-            "\u5c07\u522a\u9664\u6240\u6709\u5e73\u53f0\u7684\u767b\u5165\u8cc7\u6599\uff0c\u4e26\u6e05\u7a7a\u8cc7\u6599\u5eab\u5167\u7684\u66f4\u65b0\u8a18\u9304\uff08\u8d0a\u52a9\u984d\u6b77\u53f2\u8207\u6bcf\u65e5\u6458\u8981\uff09\u3002\u6b64\u64cd\u4f5c\u7121\u6cd5\u9084\u539f\u3002\n\u78ba\u5b9a\u8981\u7e7c\u7e8c\u55ce\uff1f",
+            tr("purge.title"),
+            tr("purge.question"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -2733,7 +2983,7 @@ class SponsorMainWindow(QMainWindow):
         self._login_flow_active["patreon"] = True
         self.patreon_btn.setEnabled(False)
         self.patreon_done_btn.setEnabled(True)
-        self.patreon_status.setText("\u700f\u89bd\u5668\u767b\u5165\u4e2d...")
+        self.patreon_status.setText(tr("login.browser"))
         self.patreon_status.setStyleSheet(f"color: {PALETTE['warning']};")
         patreon_login(
             self.browser_done_events["patreon"],
@@ -2754,17 +3004,13 @@ class SponsorMainWindow(QMainWindow):
         if s:
             self.config.setdefault("patreon", {})["cookies"] = s
             save_config(self.config)
-            self.patreon_status.setText("\u5df2\u767b\u5165")
+            self.patreon_status.setText(tr("settings.account.in"))
             self.patreon_status.setStyleSheet(f"color: {PALETTE['success']};")
             self.patreon_status.setToolTip("")
         else:
-            self.patreon_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
+            self.patreon_status.setText(tr("login.missing"))
             self.patreon_status.setStyleSheet(f"color: {PALETTE['error']};")
-            self.patreon_status.setToolTip(
-                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Patreon \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
-                "\u82e5\u7db2\u7ad9\u4e0d\u5141\u8a31\u6b64\u65b9\u5f0f\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a Cookie\u3002"
-                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
-            )
+            self.patreon_status.setToolTip(tr("login.tip.patreon"))
         self.patreon_btn.setEnabled(True)
 
     def _fanbox_login_start(self):
@@ -2777,7 +3023,7 @@ class SponsorMainWindow(QMainWindow):
         self._login_flow_active["fanbox"] = True
         self.fanbox_btn.setEnabled(False)
         self.fanbox_done_btn.setEnabled(True)
-        self.fanbox_status.setText("\u700f\u89bd\u5668\u767b\u5165\u4e2d...")
+        self.fanbox_status.setText(tr("login.browser"))
         self.fanbox_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fanbox_login(
             self.browser_done_events["fanbox"],
@@ -2798,17 +3044,13 @@ class SponsorMainWindow(QMainWindow):
         if s:
             self.config.setdefault("fanbox", {})["cookies"] = s
             save_config(self.config)
-            self.fanbox_status.setText("\u5df2\u767b\u5165")
+            self.fanbox_status.setText(tr("settings.account.in"))
             self.fanbox_status.setStyleSheet(f"color: {PALETTE['success']};")
             self.fanbox_status.setToolTip("")
         else:
-            self.fanbox_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
+            self.fanbox_status.setText(tr("login.missing"))
             self.fanbox_status.setStyleSheet(f"color: {PALETTE['error']};")
-            self.fanbox_status.setToolTip(
-                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Fanbox\uff0fPixiv \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
-                "\u82e5\u7db2\u7ad9\u4e0d\u5141\u8a31\u6b64\u65b9\u5f0f\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a Cookie\u3002"
-                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
-            )
+            self.fanbox_status.setToolTip(tr("login.tip.fanbox"))
         self.fanbox_btn.setEnabled(True)
 
     def _fantia_login_start(self):
@@ -2821,7 +3063,7 @@ class SponsorMainWindow(QMainWindow):
         self._login_flow_active["fantia"] = True
         self.fantia_btn.setEnabled(False)
         self.fantia_done_btn.setEnabled(True)
-        self.fantia_status.setText("\u700f\u89bd\u5668\u767b\u5165\u4e2d...")
+        self.fantia_status.setText(tr("login.browser"))
         self.fantia_status.setStyleSheet(f"color: {PALETTE['warning']};")
         fantia_login(
             self.browser_done_events["fantia"],
@@ -2842,22 +3084,21 @@ class SponsorMainWindow(QMainWindow):
         if s:
             self.config.setdefault("fantia", {})["session_id"] = s
             save_config(self.config)
-            self.fantia_status.setText("\u5df2\u767b\u5165")
+            self.fantia_status.setText(tr("settings.account.in"))
             self.fantia_status.setStyleSheet(f"color: {PALETTE['success']};")
             self.fantia_status.setToolTip("")
         else:
-            self.fantia_status.setText("\u672a\u53d6\u5f97\u767b\u5165\u8cc7\u6599")
+            self.fantia_status.setText(tr("login.missing"))
             self.fantia_status.setStyleSheet(f"color: {PALETTE['error']};")
-            self.fantia_status.setToolTip(
-                "\u8acb\u5728\u8df3\u51fa\u7684\u700f\u89bd\u8996\u7a97\u5167\u5b8c\u6210 Fantia \u767b\u5165\u5f8c\uff0c\u518d\u6309\u300c\u5df2\u5b8c\u6210\u300d\u3002"
-                "\u82e5\u7121\u6cd5\u767b\u5165\uff0c\u8acb\u6539\u7528\u5e33\u865f\u5bc6\u78bc\u65bc\u7db2\u9801\u767b\u5165\uff0c\u6216\u624b\u52d5\u8cbc\u4e0a _session_id\u3002"
-                "\u4e5f\u8acb\u78ba\u8a8d\u5df2\u57f7\u884c\u540c\u8cc7\u6599\u593e\u5167\u7684\u300c\u958b\u555fexe\u524d\u2026\u300dbat \u4e26\u986f\u793a\u5b89\u88dd\u6210\u529f\u3002"
-            )
+            self.fantia_status.setToolTip(tr("login.tip.fantia"))
         self.fantia_btn.setEnabled(True)
 
 def main():
     detach_windows_console_if_present()
     _cfg0 = load_config()
+    if migrate_config_schedule_interval(_cfg0):
+        save_config(_cfg0)
+    set_language(effective_ui_language(_cfg0))
     _g = _cfg0.setdefault("gui", {})
     if _g.get("qt_theme") != "dark":
         _g["qt_theme"] = "dark"

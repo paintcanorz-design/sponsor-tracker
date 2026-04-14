@@ -12,15 +12,6 @@ from src.paths import project_root
 
 CONFIG_PATH = project_root() / "config.yaml"
 
-_INCREASE_SOUND_LABEL_TO_KEY = {
-    "\u7121": "none",
-    "\u661f\u865f\uff08\u9810\u8a2d\uff09": "asterisk",
-    "\u932f\u8aa4": "hand",
-    "\u63d0\u793a\u97f3": "alert_bundle",
-}
-_INCREASE_SOUND_KEY_TO_LABEL = {v: k for k, v in _INCREASE_SOUND_LABEL_TO_KEY.items()}
-INCREASE_SOUND_PRESET_LABELS = list(_INCREASE_SOUND_LABEL_TO_KEY.keys())
-
 _REMOVED_INCREASE_SOUND_PRESETS = frozenset({"exclamation", "question", "ok"})
 
 

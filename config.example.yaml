@@ -27,7 +27,8 @@ schedule:
 
 # GUI 排程（程式會自動寫入：上次選擇的間隔與是否預設啟動排程）
 # gui:
-#   schedule_interval: "1 小時"
+#   ui_language: auto   # auto (OS) | zh_TW | en | ja
+#   schedule_interval: "1h"
 #   schedule_auto_start: true
 #   # Discord Incoming Webhook（選填）：僅「排程」自動更新且偵測到贊助增加時傳送
 #   # discord_webhook_url: "https://discord.com/api/webhooks/數字/令牌"

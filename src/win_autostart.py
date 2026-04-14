@@ -45,11 +45,11 @@ def apply_start_with_windows(enabled: bool) -> tuple[bool, str]:
             winreg.KEY_SET_VALUE | winreg.KEY_READ,
         )
     except OSError as e:
-        return False, f"無法開啟登錄檔：{e}"
+        return False, f"REG:{e}"
     try:
         if enabled:
             if not cmd:
-                return False, "找不到 pythonw 或「贊助額追蹤.pyw」，無法設定自動啟動。"
+                return False, "LAUNCH"
             winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, cmd)
         else:
             try:

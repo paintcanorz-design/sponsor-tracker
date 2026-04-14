@@ -10,7 +10,7 @@ _spec_dir = _spec_file.parent
 if not (_spec_dir / "run_gui.py").is_file():
     _spec_dir = Path(os.getcwd()).resolve()
 
-_APP = "\u8d0a\u52a9\u984d\u8ffd\u8e64"
+_APP = "SponsorTracker"
 
 # PySide6
 datas, binaries, hiddenimports = collect_all("PySide6")
@@ -56,6 +56,8 @@ a = Analysis(
         "src.qt_app",
         "src.qt_app.application",
         "src.qt_app.shared",
+        "src.i18n",
+        "src.i18n_table",
         "PySide6.QtCharts",
         "src.auth.browser_login",
         "src.playwright_frozen_env",

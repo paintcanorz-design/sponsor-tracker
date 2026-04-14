@@ -388,13 +388,56 @@ def get_dashboard_stats():
         conn.close()
 
 
+def _platforms_in_daily_summary(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT DISTINCT platform FROM daily_summary ORDER BY platform").fetchall()
+    return [r[0] for r in rows]
+
+
+def _combined_jpy_carried_forward(
+    conn: sqlite3.Connection,
+    date_str: str,
+    platforms: list[str],
+    currency_map: dict,
+    rate: float,
+) -> float | None:
+    """
+    Sum each platform's latest daily_summary total_amount on or before date_str, in JPY.
+    Missing days reuse the previous row so a failed fetch does not shrink the series to zero.
+    """
+    total = 0.0
+    for plat in platforms:
+        row = conn.execute(
+            """SELECT total_amount FROM daily_summary
+               WHERE platform = ? AND date <= ?
+               ORDER BY date DESC LIMIT 1""",
+            (plat, date_str),
+        ).fetchone()
+        if row is None:
+            return None
+        amt = float(row["total_amount"] or 0)
+        if currency_map.get(plat) == "USD":
+            amt *= rate
+        total += amt
+    return total
+
+
 def get_period_comparison(days: int = 7):
     """
-    週期比較：最近 N 天總額 vs 前 N 天總額（總額以日圓計，USD 會換算）。
-    回傳 { total_recent, total_previous, change_amount, change_percent }
+    Compare net growth in combined JPY: last N calendar days vs prior N days.
+
+    recent_growth = combined(today) - combined(N days ago)
+    prev_growth = combined(N days ago) - combined(2N days ago)
+    change_amount = recent_growth - prev_growth; change_percent uses prev_growth as denominator.
+
+    total_amount rows are cumulative snapshots (do not sum them across days).
+    Keys total_recent / total_previous are each period's net growth, not summed snapshots.
     """
+    days = max(1, int(days))
     conn = get_connection()
     try:
+        platforms = _platforms_in_daily_summary(conn)
+        if not platforms:
+            return None
         cur_rows = conn.execute(
             """SELECT platform, currency FROM sponsorship_records r
                WHERE (platform, recorded_at) IN (
@@ -403,33 +446,23 @@ def get_period_comparison(days: int = 7):
         ).fetchall()
         currency_map = {r["platform"]: r["currency"] for r in cur_rows}
         rate = _usd_jpy_rate()
-        start = date_days_ago_jst(days * 2)
-        rows = conn.execute(
-            """SELECT platform, date, total_amount FROM daily_summary
-               WHERE date >= ?
-               ORDER BY date ASC""",
-            (start,),
-        ).fetchall()
-        if not rows:
+        today = today_jst_str()
+        end_recent = today
+        start_recent = date_days_ago_jst(days)
+        start_prev = date_days_ago_jst(days * 2)
+        e_recent = _combined_jpy_carried_forward(conn, end_recent, platforms, currency_map, rate)
+        s_recent = _combined_jpy_carried_forward(conn, start_recent, platforms, currency_map, rate)
+        s_prev = _combined_jpy_carried_forward(conn, start_prev, platforms, currency_map, rate)
+        if e_recent is None or s_recent is None or s_prev is None:
             return None
-        from collections import defaultdict
-        by_date = defaultdict(float)
-        for r in rows:
-            amt = r["total_amount"] * rate if currency_map.get(r["platform"]) == "USD" else r["total_amount"]
-            by_date[r["date"]] += amt
-        dates = sorted(by_date.keys())
-        if len(dates) < 2:
-            return None
-        mid = len(dates) // 2
-        recent_dates = dates[mid:]
-        prev_dates = dates[:mid]
-        total_recent = sum(by_date[d] for d in recent_dates)
-        total_previous = sum(by_date[d] for d in prev_dates)
-        change = total_recent - total_previous
-        pct = (change / total_previous * 100) if total_previous else None
+        recent_growth = e_recent - s_recent
+        prev_growth = s_recent - s_prev
+        change = recent_growth - prev_growth
+        denom = prev_growth
+        pct = (change / denom * 100) if denom and abs(denom) > 1e-6 else None
         return {
-            "total_recent": total_recent,
-            "total_previous": total_previous,
+            "total_recent": recent_growth,
+            "total_previous": prev_growth,
             "change_amount": change,
             "change_percent": pct,
             "days": days,
