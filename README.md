@@ -18,18 +18,18 @@ Portable Windows app to **track combined sponsorship revenue** from **Patreon**,
 - **儀表板**：合計（日圓換算）、贊助人數、週對週、昨日金額變化、各平台明細、走勢（月／年）。
 - **排程更新**：可選 15 分～4 小時間隔；偵測到增加可播通知音並可推播至 Discord。
 - **國際化**：依系統語言或使用者在設定中選擇介面語言（繁中／英文／日文）。
-- **Windows 免安裝**：PyInstaller 產生 `SponsorTracker` 資料夾；**一鍵更新**會從 GitHub Release 下載你上傳的 `.zip` 覆寫程式（保留 `config.yaml` 與資料庫）。
+- **Windows 免安裝**：PyInstaller 產生 `贊助額追蹤` 資料夾；**一鍵更新**會從 GitHub Release 下載你上傳的 `.zip` 覆寫程式（保留 `config.yaml` 與資料庫）。
 
 ### 環境與首次執行
 
 1. 複製 `config.example.yaml` 為 `config.yaml`（若尚無）。
 2. 依說明安裝 **Python 依賴** 與 **`playwright install chromium`**（打包版使用者執行同資料夾內的環境安裝批次檔）。
-3. 執行 `SponsorTracker.exe`（或開發模式 `python run_gui.py`）。
+3. 執行 `贊助額追蹤.exe`（或開發模式 `python run_gui.py`）。
 
 ### 更新與版本
 
-- 程式內建版本號見 **`src/version.py`** 的 `APP_VERSION`（目前與 **1.1** 對應為 `1.1.0`）。
-- **GitHub**：推送 **`v*`** 標籤（例如 `v1.1.0`）會觸發 Actions 建置並上傳 **`SponsorTracker-Windows-v{version}.zip`**。一鍵更新需要 Release 上的**自訂 zip**（內含 `SponsorTracker.exe` 與 `_internal`），請勿僅依賴「Source code」自動壓縮檔。
+- 程式內建版本號見 **`src/version.py`** 的 `APP_VERSION`（目前與 **1.1** 對應為 `1.1.1`）。
+- **GitHub**：推送 **`v*`** 標籤（例如 `v1.1.1`）會觸發 Actions 建置並上傳 **`SponsorTracker-Windows-v{version}.zip`**。一鍵更新需要 Release 上的**自訂 zip**（內含 `贊助額追蹤.exe` 與 `_internal`），請勿僅依賴「Source code」自動壓縮檔。
 - 本機打包 zip：`.\scripts\build_windows_zip.ps1`（需已安裝 `requirements-build.txt`）。
 
 ### 設定倉庫
@@ -56,12 +56,12 @@ A **portable Windows** tool for creators to monitor **combined sponsorship incom
 
 1. Copy `config.example.yaml` to `config.yaml` if needed.
 2. Install dependencies and run **`playwright install chromium`** (see project batch files for the frozen exe workflow).
-3. Run **`SponsorTracker.exe`** or `python run_gui.py` for development.
+3. Run **`贊助額追蹤.exe`** (portable build) or `python run_gui.py` for development.
 
 ### Releases & versioning
 
-- Bump **`APP_VERSION`** in `src/version.py` (current line with **1.1** is **`1.1.0`** for semver).
-- Push a git tag like **`v1.1.0`**. The **Release** workflow builds PyInstaller output and uploads **`SponsorTracker-Windows-v1.1.0.zip`**.
+- Bump **`APP_VERSION`** in `src/version.py` (current line with **1.1** is **`1.1.1`** for semver).
+- Push a git tag like **`v1.1.1`**. The **Release** workflow builds PyInstaller output and uploads **`SponsorTracker-Windows-v1.1.1.zip`**.
 - Local zip: `.\scripts\build_windows_zip.ps1` after `pip install -r requirements.txt -r requirements-build.txt`.
 
 ---
@@ -76,20 +76,20 @@ A **portable Windows** tool for creators to monitor **combined sponsorship incom
 
 - **取得とログイン**：各プラットフォームの認証情報（Cookie / セッション）。ブラウザログインは **Playwright Chromium** が必要です。
 - **ダッシュボード**：合計・支援者数・週次比・前日比・プラットフォーム別・推移グラフ（月／年）。
-- **スケジュール更新**：15 分～4 時間間隔。増加検知時の通知音、**Discord** への投稿、毎日定時のサマリーに対応。
+- **スケジュール更新**：15 分～4 時間隔。増加検知時の通知音、**Discord** への投稿、毎日定時のサマリーに対応。
 - **表示言語**：**繁体字中国語 / 英語 / 日本語**（自動または設定で変更）。
-- **更新**：**ポータブル exe** では GitHub の **最新 Release に添付された zip**（`SponsorTracker.exe` と `_internal` を含む）から **ワンクリック更新** できます。`config.yaml` と DB は保持されます。
+- **更新**：**ポータブル exe** では GitHub の **最新 Release に添付された zip**（`贊助額追蹤.exe` と `_internal` を含む）から **ワンクリック更新** できます。`config.yaml` と DB は保持されます。
 
 ### セットアップ
 
 1. `config.example.yaml` を `config.yaml` にコピー。
 2. 依存関係と **`playwright install chromium`** を実行（同梱の bat 参照）。
-3. **`SponsorTracker.exe`** を実行（開発時は `python run_gui.py`）。
+3. **`贊助額追蹤.exe`** を実行（開発時は `python run_gui.py`）。
 
 ### リリース
 
-- バージョンは **`src/version.py`** の `APP_VERSION`（**1.1** 対応は **`1.1.0`**）。
-- **`v1.1.0`** のような **タグを push** すると GitHub Actions がビルドし、**`SponsorTracker-Windows-v1.1.0.zip`** を Release に添付します。
+- バージョンは **`src/version.py`** の `APP_VERSION`（**1.1** 対応は **`1.1.1`**）。
+- **`v1.1.1`** のような **タグを push** すると GitHub Actions がビルドし、**`SponsorTracker-Windows-v1.1.1.zip`** を Release に添付します。
 - 手元で zip：`.\scripts\build_windows_zip.ps1`
 
 ---

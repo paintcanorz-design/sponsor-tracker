@@ -10,7 +10,7 @@ _spec_dir = _spec_file.parent
 if not (_spec_dir / "run_gui.py").is_file():
     _spec_dir = Path(os.getcwd()).resolve()
 
-_APP = "SponsorTracker"
+_APP = "贊助額追蹤"
 
 # PySide6
 datas, binaries, hiddenimports = collect_all("PySide6")

@@ -169,6 +169,18 @@ def fetch_lazy_update_plan(repo: str) -> tuple[dict | None, str | None]:
     return {"kind": "update", "latest": tag, "url": url, "size": size, "name": name}, None
 
 
+def _lazy_update_exe_names(preferred: str) -> tuple[str, ...]:
+    """Prefer the running exe name; also try known aliases (English rename period)."""
+    names: list[str] = []
+    p = (preferred or "").strip()
+    if p and p not in names:
+        names.append(p)
+    for n in ("贊助額追蹤.exe", "SponsorTracker.exe"):
+        if n not in names:
+            names.append(n)
+    return tuple(names)
+
+
 def _find_staging_dir_with_exe(root: Path, exe_name: str) -> Path | None:
     for p in root.rglob(exe_name):
         try:
@@ -226,10 +238,21 @@ def download_zip_and_extract(
         except zipfile.BadZipFile:
             _cleanup_wr()
             return None, None, "不是有效的 zip 檔。"
-        staging = _find_staging_dir_with_exe(extract_root, exe_name)
+        staging = None
+        tried = _lazy_update_exe_names(exe_name)
+        for en in tried:
+            staging = _find_staging_dir_with_exe(extract_root, en)
+            if staging is not None:
+                break
         if staging is None:
             _cleanup_wr()
-            return None, None, f"壓縮檔內找不到「{exe_name}」，請確認 zip 為免安裝資料夾內容。"
+            return (
+                None,
+                None,
+                "壓縮檔內找不到免安裝 exe（已嘗試："
+                + "、".join(tried)
+                + "）。請確認 zip 為免安裝資料夾內容。",
+            )
         try:
             if zip_path.is_file():
                 zip_path.unlink(missing_ok=True)

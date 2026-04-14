@@ -1,5 +1,5 @@
 # Build Windows portable (onedir) and attach ZIP to the GitHub Release for the pushed tag.
-# Tag format: v1.1.0 (must be newer than APP_VERSION in src/version.py for in-app updates).
+# Tag format: v1.1.1 (must match or follow APP_VERSION in src/version.py for in-app updates).
 name: Release Windows build
 
 on:
@@ -35,12 +35,14 @@ jobs:
         run: |
           $ref = "${{ github.ref_name }}"
           $ver = $ref.TrimStart('v')
-          if (-not (Test-Path "dist/SponsorTracker/SponsorTracker.exe")) {
-            throw "Build output missing dist/SponsorTracker/SponsorTracker.exe"
+          $dist = Join-Path "dist" "贊助額追蹤"
+          $exe = Join-Path $dist "贊助額追蹤.exe"
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Build output missing: $exe"
           }
           $zip = "SponsorTracker-Windows-v$ver.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "dist/SponsorTracker" -DestinationPath $zip
+          Compress-Archive -LiteralPath $dist -DestinationPath $zip
           Get-Item $zip | Format-List Name, Length
 
       - name: Upload release asset
