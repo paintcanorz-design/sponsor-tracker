@@ -49,7 +49,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -82,7 +81,6 @@ from src.currency_ui import (
 )
 from src.database import (
     clear_sponsorship_data,
-    export_daily_summary_csv,
     get_chart_combined_daily_between,
     get_chart_combined_monthly_peaks_last12,
     get_total_vs_days_ago,
@@ -202,6 +200,55 @@ def _qf(size: int, bold: bool = False, weight: QFont.Weight | None = None) -> QF
     else:
         f.setBold(bold)
     return f
+
+
+_COMPACT_FONT_PROFILES: dict[str, dict[str, int]] = {
+    "small": {
+        "total": 16,
+        "today": 9,
+        "arrow": 11,
+        "inc_line": 10,
+        "plat_name": 10,
+        "plat_amt": 13,
+        "plat_td": 9,
+        "plat_row_h": 20,
+    },
+    "medium": {
+        "total": 18,
+        "today": 10,
+        "arrow": 12,
+        "inc_line": 11,
+        "plat_name": 11,
+        "plat_amt": 14,
+        "plat_td": 10,
+        "plat_row_h": 22,
+    },
+    "large": {
+        "total": 20,
+        "today": 11,
+        "arrow": 13,
+        "inc_line": 12,
+        "plat_name": 12,
+        "plat_amt": 15,
+        "plat_td": 11,
+        "plat_row_h": 24,
+    },
+}
+
+
+def normalize_compact_font_size(raw: object) -> str:
+    v = str(raw or "").strip().lower()
+    if v in ("medium", "med", "m"):
+        return "medium"
+    if v in ("large", "l", "big"):
+        return "large"
+    return "small"
+
+
+def compact_font_profile_from_config(cfg: dict) -> dict[str, int]:
+    gui = cfg.get("gui") or {}
+    key = normalize_compact_font_size(gui.get("compact_font_size"))
+    return dict(_COMPACT_FONT_PROFILES[key])
 
 
 def _qcolor_hex(hex_rgb: str) -> QColor:
@@ -357,6 +404,29 @@ def _app_stylesheet() -> str:
         color: #ffffff;
     }}
     QPushButton#navTab:checked:hover {{
+        background-color: {c["accent_hover"]};
+        color: #ffffff;
+    }}
+
+    QPushButton#settingsSegTab {{
+        background-color: transparent;
+        border: none;
+        border-radius: 8px;
+        color: {c["text_secondary"]};
+        font-size: 12px;
+        font-weight: 600;
+        padding: 8px 8px;
+        text-align: center;
+    }}
+    QPushButton#settingsSegTab:hover {{
+        background-color: {c["segment_hover"]};
+        color: {c["text"]};
+    }}
+    QPushButton#settingsSegTab:checked {{
+        background-color: {c["accent"]};
+        color: #ffffff;
+    }}
+    QPushButton#settingsSegTab:checked:hover {{
         background-color: {c["accent_hover"]};
         color: #ffffff;
     }}
@@ -693,7 +763,7 @@ class CompactFloatWindow(QWidget):
         self._compact_move_shrink_timer.timeout.connect(self._shrink_compact_window)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setWindowTitle(tr("app.title_compact"))
-        self.setMinimumWidth(148)
+        self.setMinimumWidth(96)
         self.setMaximumWidth(16777215)
         self.setMaximumHeight(16777215)
         self.setStyleSheet(_compact_window_stylesheet())
@@ -742,17 +812,18 @@ class CompactFloatWindow(QWidget):
         row_total = QHBoxLayout()
         row_total.setSpacing(3)
         self._total_lbl = QLabel("\u00a50")
-        self._total_lbl.setFont(_qf(16, True))
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
+        self._total_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         row_total.addWidget(self._total_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._total_today_lbl = QLabel("")
-        self._total_today_lbl.setFont(_qf(9, True))
         self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._total_today_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._total_today_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         row_total.addWidget(self._total_today_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._inc_arrow_lbl = QLabel("")
-        self._inc_arrow_lbl.setFont(_qf(11, True))
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
+        self._inc_arrow_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+        self._inc_arrow_lbl.setFixedWidth(0)
         row_total.addWidget(self._inc_arrow_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         self._btn_compact_open_main = QToolButton()
         self._btn_compact_open_main.setObjectName("compactChromeBtn")
@@ -765,11 +836,18 @@ class CompactFloatWindow(QWidget):
         self._btn_compact_open_main.setAutoRaise(True)
         self._btn_compact_open_main.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn_compact_open_main.clicked.connect(self._expand)
+        self._btn_compact_open_main.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         row_total.addWidget(self._btn_compact_open_main, 0, Qt.AlignmentFlag.AlignVCenter)
-        pl.addLayout(row_total)
+        self._row_total_wrap = QWidget()
+        self._row_total_wrap.setLayout(row_total)
+        self._row_total_wrap.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        pl.addWidget(self._row_total_wrap, 0, Qt.AlignmentFlag.AlignLeft)
 
         self._increase_lbl = QLabel("")
-        self._increase_lbl.setFont(_qf(10, True))
         self._increase_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._increase_lbl.setMinimumHeight(0)
         self._increase_lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
@@ -784,36 +862,6 @@ class CompactFloatWindow(QWidget):
         self._plat_box.setAlignment(Qt.AlignmentFlag.AlignTop)
         pl.addWidget(self._plat_host)
 
-        _fm_amt = QFontMetrics(_qf(13, True))
-        _fm_td_small = QFontMetrics(_qf(9, True))
-        _sample_amt7 = format_money_jpy_as_display(9_999_999.0, app.config)
-        _sample_td5 = format_money_jpy_as_display(99_999.0, app.config, signed=True)
-        _sample_td5n = format_money_jpy_as_display(-99_999.0, app.config, signed=True)
-        _td_col_w = (
-            max(
-                _fm_td_small.horizontalAdvance(_sample_td5),
-                _fm_td_small.horizontalAdvance(_sample_td5n),
-            )
-            + 2
-        )
-        self._plat_line_base_w = (
-            max(
-                _fm_amt.horizontalAdvance(f"\u25cf {n}  {_sample_amt7}")
-                for n in self._PLAT_NAMES.values()
-            )
-            + 2
-        )
-        self._plat_td_suffix_w = 6 + _td_col_w
-        _fm16 = QFontMetrics(_qf(16, True))
-        self._compact_w_tot = _fm16.horizontalAdvance(_sample_amt7) + 2
-        self._compact_w_tsum = (
-            max(
-                _fm_td_small.horizontalAdvance(_sample_td5),
-                _fm_td_small.horizontalAdvance(_sample_td5n),
-            )
-            + 2
-        )
-        self._total_lbl.setFixedWidth(self._compact_w_tot)
         self._total_today_lbl.setFixedWidth(0)
         self._total_today_lbl.hide()
 
@@ -918,6 +966,12 @@ class CompactFloatWindow(QWidget):
                 w.deleteLater()
 
     def refresh(self, stats: dict | None = None):
+        cfg = self._app.config
+        cf = compact_font_profile_from_config(cfg)
+        self._total_lbl.setFont(_qf(cf["total"], True))
+        self._total_today_lbl.setFont(_qf(cf["today"], True))
+        self._inc_arrow_lbl.setFont(_qf(cf["arrow"], True))
+        self._increase_lbl.setFont(_qf(cf["inc_line"], True))
         self._total_lbl.setStyleSheet(f"color: {PALETTE['text']} !important;")
         self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
         self._inc_arrow_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
@@ -931,12 +985,16 @@ class CompactFloatWindow(QWidget):
             s = stats
         s = self._app._filter_stats_for_dashboard(s)
         total = float(s.get("total_amount") or 0)
-        cfg = self._app.config
-        self._total_lbl.setText(format_money_jpy_as_display(total, cfg))
+        total_txt = format_money_jpy_as_display(total, cfg)
+        self._total_lbl.setText(total_txt)
+        _fm_tot = QFontMetrics(self._total_lbl.font())
+        self._total_lbl.setFixedWidth(_fm_tot.horizontalAdvance(total_txt) + 4)
         today_sum = float(s.get("today_positive_increase_jpy") or 0)
         if today_sum > 0:
-            self._total_today_lbl.setFixedWidth(self._compact_w_tsum)
-            self._total_today_lbl.setText(format_money_jpy_as_display(today_sum, cfg, signed=True))
+            td_txt = format_money_jpy_as_display(today_sum, cfg, signed=True)
+            self._total_today_lbl.setText(td_txt)
+            _fm_td = QFontMetrics(self._total_today_lbl.font())
+            self._total_today_lbl.setFixedWidth(_fm_td.horizontalAdvance(td_txt) + 3)
             self._total_today_lbl.setStyleSheet(f"color: {PALETTE['success']} !important;")
             self._total_today_lbl.show()
         else:
@@ -963,39 +1021,43 @@ class CompactFloatWindow(QWidget):
             name_esc = html.escape(name)
             amt_s = html.escape(format_money_jpy_as_display(amt_jpy, cfg))
             td = float(today_by_plat.get(plat) or 0.0)
+            _pn, _pa, _ptd = cf["plat_name"], cf["plat_amt"], cf["plat_td"]
+            _prh = cf["plat_row_h"]
             if td != 0:
                 tcol = PALETTE["success"] if td > 0 else PALETTE["error"]
                 today_esc = html.escape(format_money_jpy_as_display(td, cfg, signed=True))
                 today_part = (
-                    f"&nbsp;&nbsp;<span style='color:{tcol}; font-weight:600; font-size:9px; "
+                    f"&nbsp;&nbsp;<span style='color:{tcol}; font-weight:600; font-size:{_ptd}px; "
                     f"letter-spacing:-0.25px'>{today_esc}</span>"
                 )
                 line = (
-                    f"<span style='color:{color}; font-weight:600; font-size:10px; "
+                    f"<span style='color:{color}; font-weight:600; font-size:{_pn}px; "
                     f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
                     f"&nbsp;&nbsp;"
-                    f"<span style='color:{tc}; font-weight:700; font-size:13px; "
+                    f"<span style='color:{tc}; font-weight:700; font-size:{_pa}px; "
                     f"letter-spacing:-0.3px'>{amt_s}</span>"
                     f"{today_part}"
                 )
-                plat_w = self._plat_line_base_w + self._plat_td_suffix_w
             else:
                 line = (
-                    f"<span style='color:{color}; font-weight:600; font-size:10px; "
+                    f"<span style='color:{color}; font-weight:600; font-size:{_pn}px; "
                     f"letter-spacing:0.15px'>\u25cf {name_esc}</span>"
                     f"&nbsp;&nbsp;"
-                    f"<span style='color:{tc}; font-weight:700; font-size:13px; "
+                    f"<span style='color:{tc}; font-weight:700; font-size:{_pa}px; "
                     f"letter-spacing:-0.3px'>{amt_s}</span>"
                 )
-                plat_w = self._plat_line_base_w
             lbl = QLabel()
             lbl.setTextFormat(Qt.TextFormat.RichText)
             lbl.setWordWrap(False)
-            lbl.setMinimumHeight(20)
-            lbl.setFixedWidth(plat_w)
+            lbl.setMinimumHeight(_prh)
             lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             lbl.setText(line)
+            lbl.ensurePolished()
+            _pw = lbl.sizeHint().width()
+            if _pw < 8:
+                _pw = 96
+            lbl.setFixedWidth(_pw)
             self._plat_box.addWidget(lbl, 0, Qt.AlignmentFlag.AlignLeft)
         inc_this = getattr(self._app, "_last_update_increase", None) or 0
         if inc_this > 0:
@@ -1016,7 +1078,13 @@ class CompactFloatWindow(QWidget):
     def _update_indicator(self):
         until = getattr(self._app, "_increase_indicator_until", None)
         active = bool(until is not None and now_jst() <= until)
-        self._inc_arrow_lbl.setText("\u25b2" if active else "")
+        _fm_ia = QFontMetrics(self._inc_arrow_lbl.font())
+        if active:
+            self._inc_arrow_lbl.setText("\u25b2")
+            self._inc_arrow_lbl.setFixedWidth(_fm_ia.horizontalAdvance("\u25b2") + 2)
+        else:
+            self._inc_arrow_lbl.setText("")
+            self._inc_arrow_lbl.setFixedWidth(0)
 
 
 class SponsorMainWindow(QMainWindow):
@@ -1527,27 +1595,22 @@ class SponsorMainWindow(QMainWindow):
                     ac.setText("")
                     ac.setVisible(False)
 
-    def _on_ui_language_changed(self, _idx: int = 0) -> None:
-        combo = getattr(self, "_ui_lang_combo", None)
-        if combo is None:
+    def _on_ui_language_segment(self, idx: int) -> None:
+        vals = getattr(self, "_ui_lang_seg_vals", None)
+        if not vals or idx < 0 or idx >= len(vals):
             return
-        raw = combo.currentData()
-        if raw is None:
-            return
+        raw = vals[idx]
         self.config = load_config()
         self.config.setdefault("gui", {})["ui_language"] = str(raw)
         save_config(self.config)
         set_language(effective_ui_language(self.config))
         self._apply_full_retranslate()
 
-    def _on_display_currency_changed(self, _idx: int = 0) -> None:
-        combo = getattr(self, "_display_currency_combo", None)
-        if combo is None:
+    def _on_display_currency_segment(self, idx: int) -> None:
+        vals = getattr(self, "_display_currency_seg_vals", None)
+        if not vals or idx < 0 or idx >= len(vals):
             return
-        raw = combo.currentData()
-        if raw is None:
-            return
-        code = str(raw).strip().lower()
+        code = str(vals[idx]).strip().lower()
         if code not in ("jpy", "twd", "usd"):
             return
         self.config = load_config()
@@ -1569,6 +1632,54 @@ class SponsorMainWindow(QMainWindow):
         cw = self._compact_win
         if cw is not None and cw.isVisible():
             cw.refresh()
+
+    def _on_compact_font_segment(self, idx: int) -> None:
+        vals = getattr(self, "_compact_font_seg_vals", None)
+        if not vals or idx < 0 or idx >= len(vals):
+            return
+        key = normalize_compact_font_size(vals[idx])
+        self.config = load_config()
+        self.config.setdefault("gui", {})["compact_font_size"] = key
+        save_config(self.config)
+        cw = self._compact_win
+        if cw is not None and cw.isVisible():
+            cw.refresh()
+
+    def _add_settings_segment_row(
+        self,
+        parent_layout: QVBoxLayout,
+        pairs: tuple[tuple[str, str], ...],
+        current: str,
+        slot,
+    ) -> tuple[QButtonGroup, list[QPushButton], list[str]]:
+        bar = QFrame()
+        bar.setObjectName("navTabBar")
+        hl = QHBoxLayout(bar)
+        hl.setContentsMargins(4, 4, 4, 4)
+        hl.setSpacing(2)
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        btns: list[QPushButton] = []
+        vals = [p[0] for p in pairs]
+        for i, (_val, lk) in enumerate(pairs):
+            b = QPushButton(tr(lk))
+            b.setObjectName("settingsSegTab")
+            b.setCheckable(True)
+            b.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            group.addButton(b, i)
+            hl.addWidget(b, 1)
+            btns.append(b)
+        parent_layout.addWidget(bar)
+        group.idClicked.connect(slot)
+        group.blockSignals(True)
+        try:
+            if current in vals:
+                group.button(vals.index(current)).setChecked(True)
+            else:
+                group.button(0).setChecked(True)
+        finally:
+            group.blockSignals(False)
+        return group, btns, vals
 
     def _rebuild_sched_interval_combo(self, select_sid: str | None = None) -> None:
         if not hasattr(self, "_sched_interval"):
@@ -1680,32 +1791,20 @@ class SponsorMainWindow(QMainWindow):
         if hasattr(self, "_lbl_playwright_miss"):
             self._lbl_playwright_miss.setText(tr("settings.playwright.missing"))
         self._rebuild_sched_interval_combo()
-        if hasattr(self, "_ui_lang_combo"):
-            pairs = (
-                ("auto", "lang.auto"),
-                (LANG_ZH_TW, "lang.zh_TW"),
-                (LANG_EN, "lang.en"),
-                (LANG_JA, "lang.ja"),
-            )
-            with QSignalBlocker(self._ui_lang_combo):
-                for i, (_val, lk) in enumerate(pairs):
-                    if i < self._ui_lang_combo.count():
-                        self._ui_lang_combo.setItemText(i, tr(lk))
-        if hasattr(self, "_display_currency_combo"):
-            _cur_sel = self._display_currency_combo.currentData()
-            pairs_dc = (
-                ("jpy", "settings.currency.jpy"),
-                ("twd", "settings.currency.twd"),
-                ("usd", "settings.currency.usd"),
-            )
-            with QSignalBlocker(self._display_currency_combo):
-                for i, (_code, lk) in enumerate(pairs_dc):
-                    if i < self._display_currency_combo.count():
-                        self._display_currency_combo.setItemText(i, tr(lk))
-                for i in range(self._display_currency_combo.count()):
-                    if self._display_currency_combo.itemData(i) == _cur_sel:
-                        self._display_currency_combo.setCurrentIndex(i)
-                        break
+        if hasattr(self, "_ui_lang_seg_btns"):
+            self._ui_lang_seg_group.blockSignals(True)
+            try:
+                for b, (_v, lk) in zip(self._ui_lang_seg_btns, self._ui_lang_seg_pairs):
+                    b.setText(tr(lk))
+            finally:
+                self._ui_lang_seg_group.blockSignals(False)
+        if hasattr(self, "_display_currency_seg_btns"):
+            self._display_currency_seg_group.blockSignals(True)
+            try:
+                for b, (_v, lk) in zip(self._display_currency_seg_btns, self._display_currency_seg_pairs):
+                    b.setText(tr(lk))
+            finally:
+                self._display_currency_seg_group.blockSignals(False)
         if hasattr(self, "update_btn"):
             self.update_btn.setText(tr("settings.fetch"))
         self._refresh_schedule_button_and_status()
@@ -1725,8 +1824,13 @@ class SponsorMainWindow(QMainWindow):
             self._btn_github_repo.setToolTip(
                 "" if _ok_repo else tr("settings.version.github_tip")
             )
-        if hasattr(self, "_btn_export_csv"):
-            self._btn_export_csv.setText(tr("settings.export.btn"))
+        if hasattr(self, "_compact_font_seg_btns"):
+            self._compact_font_seg_group.blockSignals(True)
+            try:
+                for b, (_v, lk) in zip(self._compact_font_seg_btns, self._compact_font_seg_pairs):
+                    b.setText(tr(lk))
+            finally:
+                self._compact_font_seg_group.blockSignals(False)
         for key in ("patreon", "fanbox", "fantia"):
             if hasattr(self, f"{key}_btn"):
                 getattr(self, f"{key}_btn").setText(tr("settings.login"))
@@ -2667,33 +2771,6 @@ class SponsorMainWindow(QMainWindow):
             return
         QDesktopServices.openUrl(QUrl(f"https://github.com/{repo}"))
 
-    def _on_export_daily_csv_clicked(self) -> None:
-        default_n = f"sponsor_daily_{today_jst_str().replace('-', '')}.csv"
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            tr("settings.export.dialog_title"),
-            str(Path.home() / default_n),
-            "CSV (*.csv)",
-        )
-        if not path:
-            return
-        p = Path(path)
-        if p.suffix.lower() != ".csv":
-            p = p.with_suffix(".csv")
-        ok, msg = export_daily_summary_csv(p)
-        if ok:
-            QMessageBox.information(
-                self,
-                tr("settings.export.title"),
-                tr("settings.export.ok", path=msg),
-            )
-        else:
-            QMessageBox.critical(
-                self,
-                tr("settings.export.title"),
-                tr("settings.export.fail", err=msg),
-            )
-
     def _on_app_update_clicked(self):
         if self._app_update_busy:
             return
@@ -2945,24 +3022,20 @@ class SponsorMainWindow(QMainWindow):
         lang_l = QVBoxLayout(lang_card)
         lang_l.setContentsMargins(14, 12, 14, 12)
         lang_l.setSpacing(8)
-        self._ui_lang_combo = QComboBox()
         _lang_pairs = (
             ("auto", "lang.auto"),
             (LANG_ZH_TW, "lang.zh_TW"),
             (LANG_EN, "lang.en"),
             (LANG_JA, "lang.ja"),
         )
-        for _val, lk in _lang_pairs:
-            self._ui_lang_combo.addItem(tr(lk), _val)
+        self._ui_lang_seg_pairs = _lang_pairs
         raw_ui = str(gui_sound.get("ui_language", "auto")).strip().lower()
         _sel_lang = "auto" if raw_ui in ("auto", "", "system") else normalize_ui_language_raw(raw_ui)
-        with QSignalBlocker(self._ui_lang_combo):
-            for _i in range(self._ui_lang_combo.count()):
-                if self._ui_lang_combo.itemData(_i) == _sel_lang:
-                    self._ui_lang_combo.setCurrentIndex(_i)
-                    break
-        self._ui_lang_combo.currentIndexChanged.connect(self._on_ui_language_changed)
-        lang_l.addWidget(self._ui_lang_combo)
+        self._ui_lang_seg_group, self._ui_lang_seg_btns, self._ui_lang_seg_vals = (
+            self._add_settings_segment_row(
+                lang_l, _lang_pairs, _sel_lang, self._on_ui_language_segment
+            )
+        )
         left.addWidget(lang_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
@@ -2971,61 +3044,39 @@ class SponsorMainWindow(QMainWindow):
         cur_l = QVBoxLayout(cur_card)
         cur_l.setContentsMargins(14, 12, 14, 12)
         cur_l.setSpacing(8)
-        self._display_currency_combo = QComboBox()
-        for _code, lk in (
+        _cur_pairs = (
             ("jpy", "settings.currency.jpy"),
             ("twd", "settings.currency.twd"),
             ("usd", "settings.currency.usd"),
-        ):
-            self._display_currency_combo.addItem(tr(lk), _code)
+        )
+        self._display_currency_seg_pairs = _cur_pairs
         _dcc0 = display_currency_code(self.config)
-        with QSignalBlocker(self._display_currency_combo):
-            for _i in range(self._display_currency_combo.count()):
-                if self._display_currency_combo.itemData(_i) == _dcc0:
-                    self._display_currency_combo.setCurrentIndex(_i)
-                    break
-        self._display_currency_combo.currentIndexChanged.connect(self._on_display_currency_changed)
-        cur_l.addWidget(self._display_currency_combo)
+        self._display_currency_seg_group, self._display_currency_seg_btns, self._display_currency_seg_vals = (
+            self._add_settings_segment_row(
+                cur_l, _cur_pairs, _dcc0, self._on_display_currency_segment
+            )
+        )
         left.addWidget(cur_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        self._add_settings_group(left, "settings.group.discord")
-        dc = _make_settings_group_card(card_parent)
-        dcl = QVBoxLayout(dc)
-        dcl.setContentsMargins(14, 12, 14, 12)
-        dcl.setSpacing(10)
-        dcl.addWidget(_settings_form_label(tr("settings.discord.url")))
-        self._discord_webhook_entry = QLineEdit()
-        self._discord_webhook_entry.setPlaceholderText("https://discord.com/api/webhooks/...")
-        self._discord_webhook_entry.setText(gui_sound.get("discord_webhook_url") or "")
-        self._discord_webhook_entry.editingFinished.connect(self._on_discord_webhook_done)
-        dcl.addWidget(self._discord_webhook_entry)
-        dbtn = QHBoxLayout()
-        self._btn_discord_test = QPushButton(tr("settings.discord.test"))
-        self._btn_discord_test.clicked.connect(self._test_discord_webhook)
-        dbtn.addWidget(self._btn_discord_test)
-        dbtn.addStretch()
-        dcl.addLayout(dbtn)
-        self._sw_daily_report = QCheckBox(tr("settings.discord.daily"))
-        self._sw_daily_report.setChecked(bool(gui_sound.get("daily_report_enabled")))
-        self._sw_daily_report.toggled.connect(self._on_daily_report_switch)
-        dcl.addWidget(self._sw_daily_report)
-        dtr = QHBoxLayout()
-        self._lbl_discord_time = _settings_form_label(tr("settings.discord.time"))
-        dtr.addWidget(self._lbl_discord_time, 0)
-        self._daily_report_time_entry = QLineEdit()
-        _drt = gui_sound.get("daily_report_time_jst") or "09:00"
-        _parsed_drt = parse_jst_hhmm(str(_drt))
-        if _parsed_drt:
-            _drt = f"{_parsed_drt[0]:02d}:{_parsed_drt[1]:02d}"
-        self._daily_report_time_entry.setText(_drt)
-        self._daily_report_time_entry.editingFinished.connect(self._on_daily_report_time_done)
-        dtr.addWidget(self._daily_report_time_entry, 1)
-        self._btn_discord_report_test = QPushButton(tr("settings.discord.test_report"))
-        self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
-        dtr.addWidget(self._btn_discord_report_test)
-        dcl.addLayout(dtr)
-        left.addWidget(dc)
+        self._add_settings_group(left, "settings.group.compact_font", "settings.compact.blurb")
+        compact_card = _make_settings_group_card(card_parent)
+        ccl = QVBoxLayout(compact_card)
+        ccl.setContentsMargins(14, 12, 14, 12)
+        ccl.setSpacing(8)
+        _cf_pairs = (
+            ("small", "settings.compact.small"),
+            ("medium", "settings.compact.medium"),
+            ("large", "settings.compact.large"),
+        )
+        self._compact_font_seg_pairs = _cf_pairs
+        _cfs = normalize_compact_font_size(gui_sound.get("compact_font_size"))
+        self._compact_font_seg_group, self._compact_font_seg_btns, self._compact_font_seg_vals = (
+            self._add_settings_segment_row(
+                ccl, _cf_pairs, _cfs, self._on_compact_font_segment
+            )
+        )
+        left.addWidget(compact_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
         left.addStretch(1)
 
@@ -3148,28 +3199,43 @@ class SponsorMainWindow(QMainWindow):
         left.addWidget(sync_card)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
-        self._add_settings_group(left, "settings.export.title", "settings.export.blurb")
-        export_card = _make_settings_group_card(card_parent)
-        ex_l = QVBoxLayout(export_card)
-        ex_l.setContentsMargins(14, 12, 14, 12)
-        ex_l.setSpacing(8)
-        self._btn_export_csv = QPushButton(tr("settings.export.btn"))
-        self._btn_export_csv.setMinimumHeight(36)
-        self._btn_export_csv.clicked.connect(self._on_export_daily_csv_clicked)
-        ex_l.addWidget(self._btn_export_csv)
-        left.addWidget(export_card)
-        left.addSpacing(_SETTINGS_SECTION_VGAP)
-
-        self._add_settings_group(left, "settings.group.purge", "settings.purge.blurb")
-        purge_card = _make_settings_group_card(card_parent)
-        pr = QVBoxLayout(purge_card)
-        pr.setContentsMargins(14, 12, 14, 12)
-        pr.setSpacing(10)
-        self._purge_btn = QPushButton(tr("settings.purge.btn"))
-        self._purge_btn.setMinimumHeight(38)
-        self._purge_btn.clicked.connect(self._master_clear_login_and_history)
-        pr.addWidget(self._purge_btn)
-        left.addWidget(purge_card)
+        self._add_settings_group(left, "settings.group.discord")
+        dc = _make_settings_group_card(card_parent)
+        dcl = QVBoxLayout(dc)
+        dcl.setContentsMargins(14, 12, 14, 12)
+        dcl.setSpacing(10)
+        dcl.addWidget(_settings_form_label(tr("settings.discord.url")))
+        self._discord_webhook_entry = QLineEdit()
+        self._discord_webhook_entry.setPlaceholderText("https://discord.com/api/webhooks/...")
+        self._discord_webhook_entry.setText(gui_sound.get("discord_webhook_url") or "")
+        self._discord_webhook_entry.editingFinished.connect(self._on_discord_webhook_done)
+        dcl.addWidget(self._discord_webhook_entry)
+        dbtn = QHBoxLayout()
+        self._btn_discord_test = QPushButton(tr("settings.discord.test"))
+        self._btn_discord_test.clicked.connect(self._test_discord_webhook)
+        dbtn.addWidget(self._btn_discord_test)
+        dbtn.addStretch()
+        dcl.addLayout(dbtn)
+        self._sw_daily_report = QCheckBox(tr("settings.discord.daily"))
+        self._sw_daily_report.setChecked(bool(gui_sound.get("daily_report_enabled")))
+        self._sw_daily_report.toggled.connect(self._on_daily_report_switch)
+        dcl.addWidget(self._sw_daily_report)
+        dtr = QHBoxLayout()
+        self._lbl_discord_time = _settings_form_label(tr("settings.discord.time"))
+        dtr.addWidget(self._lbl_discord_time, 0)
+        self._daily_report_time_entry = QLineEdit()
+        _drt = gui_sound.get("daily_report_time_jst") or "09:00"
+        _parsed_drt = parse_jst_hhmm(str(_drt))
+        if _parsed_drt:
+            _drt = f"{_parsed_drt[0]:02d}:{_parsed_drt[1]:02d}"
+        self._daily_report_time_entry.setText(_drt)
+        self._daily_report_time_entry.editingFinished.connect(self._on_daily_report_time_done)
+        dtr.addWidget(self._daily_report_time_entry, 1)
+        self._btn_discord_report_test = QPushButton(tr("settings.discord.test_report"))
+        self._btn_discord_report_test.clicked.connect(self._test_discord_daily_report)
+        dtr.addWidget(self._btn_discord_report_test)
+        dcl.addLayout(dtr)
+        left.addWidget(dc)
         left.addSpacing(_SETTINGS_SECTION_VGAP)
 
         self._refresh_schedule_button_and_status()
@@ -3279,6 +3345,18 @@ class SponsorMainWindow(QMainWindow):
             rl.addWidget(sw_vis)
             acc_l.addWidget(roww)
         right.addWidget(acc_card)
+        right.addSpacing(_SETTINGS_SECTION_VGAP)
+
+        self._add_settings_group(right, "settings.group.purge", "settings.purge.blurb")
+        purge_card = _make_settings_group_card(card_parent)
+        pr = QVBoxLayout(purge_card)
+        pr.setContentsMargins(14, 12, 14, 12)
+        pr.setSpacing(10)
+        self._purge_btn = QPushButton(tr("settings.purge.btn"))
+        self._purge_btn.setMinimumHeight(38)
+        self._purge_btn.clicked.connect(self._master_clear_login_and_history)
+        pr.addWidget(self._purge_btn)
+        right.addWidget(purge_card)
         right.addSpacing(_SETTINGS_SECTION_VGAP)
 
         if not PLAYWRIGHT_AVAILABLE:

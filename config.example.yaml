@@ -29,6 +29,7 @@ schedule:
 # gui:
 #   ui_language: auto   # auto (OS) | zh_TW | en | ja
 #   display_currency: jpy   # jpy | twd | usd (internal totals are JPY; UI converts)
+#   compact_font_size: small   # small | medium | large — floating mini dashboard text
 #   # fx_daily: app fills at first fetch after each JST date change (date_jst, usd_jpy, usd_twd)
 #   schedule_interval: "1h"
 #   schedule_auto_start: true
