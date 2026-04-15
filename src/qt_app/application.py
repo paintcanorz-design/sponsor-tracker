@@ -93,7 +93,12 @@ from src.exchange import ensure_fx_daily, sync_fx_cache_from_config
 from src.fetchers.patreon_fetcher import PatreonFetcher
 from src.fetchers.fanbox_fetcher import FanboxFetcher
 from src.fetchers.fantia_fetcher import FantiaFetcher
-from src.auth.browser_login import fanbox_login, fantia_login, patreon_login, PLAYWRIGHT_AVAILABLE
+from src.auth.browser_login import fanbox_login, fantia_login, patreon_login
+from src.playwright_setup import (
+    ensure_playwright_and_chromium,
+    import_sync_playwright,
+    needs_playwright_setup,
+)
 from src.discord_webhook import (
     format_daily_dashboard_report,
     format_scheduled_increase_message,
@@ -151,10 +156,13 @@ from src.qt_app.shared import (
 
 _PLATFORM_ORDER: tuple[str, ...] = ("patreon", "fanbox", "fantia")
 
-# Hidden test mode (5 quick taps on header app title): fake dashboard / mini numbers.
+# Hidden test mode (5 quick taps on header app title): synthetic 2026/1/1–2/1 ramp —
+# each visible platform +1,000 JPY per calendar day, ending at 123,456 on 2/1 (hero / 週比 / 日比一致).
 _DASH_TEST_PLATFORM_AMT = 123456.0
+_DASH_TEST_DAILY_INCREASE = 1000.0
+_DASH_TEST_YESTERDAY_PER_PLATFORM = _DASH_TEST_PLATFORM_AMT - _DASH_TEST_DAILY_INCREASE
 _DASH_TEST_PLATFORM_PATRONS = 999
-_DASH_TEST_TODAY_INCR = 9999.0
+_DASH_TEST_SCENARIO_LAST_JST = "2026-02-01 12:00:00"
 
 # Vertical gap after each settings / account section card (headline sits above the card).
 _SETTINGS_SECTION_VGAP = 24
@@ -1102,6 +1110,7 @@ class SponsorMainWindow(QMainWindow):
     _update_check_worker_done = Signal(object)
     # Playwright \u5728\u80cc\u666f\u57f7\u7dd2\u56de\u547c cookie \u6642\uff0c\u5fc5\u9808\u7528 Signal \u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u53ef\u5728\u8a72\u57f7\u7dd2 QTimer.singleShot\uff09\u3002
     _browser_login_payload = Signal(str, int, str)
+    _playwright_install_done = Signal(str, bool, str)
     # \u80cc\u666f\u57f7\u7dd2\u5b8c\u6210\u8cc7\u6599\u64f7\u53d6\u5f8c\u6392\u968a\u56de\u4e3b\u57f7\u7dd2\uff08\u4e0d\u7528 QTimer.singleShot\uff09
     _manual_update_done = Signal(object, bool)
     _manual_update_failed = Signal(str)
@@ -1153,6 +1162,7 @@ class SponsorMainWindow(QMainWindow):
         self._app_update_busy = False
         self._oneclick_busy = False
         self._oneclick_prog: QProgressDialog | None = None
+        self._playwright_install_running = False
         self._settings_i18n_headings: list[tuple[QLabel, str]] = []
         self._settings_i18n_blurbs: list[tuple[QLabel, str]] = []
         self._last_update_time_jst: str = ""
@@ -1173,6 +1183,9 @@ class SponsorMainWindow(QMainWindow):
         )
         self._oneclick_dl_progress.connect(
             self._on_oneclick_dl_progress, Qt.ConnectionType.QueuedConnection
+        )
+        self._playwright_install_done.connect(
+            self._on_playwright_install_done, Qt.ConnectionType.QueuedConnection
         )
 
         sync_fx_cache_from_config(self.config)
@@ -1966,6 +1979,11 @@ class SponsorMainWindow(QMainWindow):
             ta = 0.0
             tp = 0
             ftoday: dict[str, float] = {}
+            _pct_y = (
+                (_DASH_TEST_DAILY_INCREASE / _DASH_TEST_YESTERDAY_PER_PLATFORM * 100)
+                if _DASH_TEST_YESTERDAY_PER_PLATFORM > 1e-9
+                else None
+            )
             for key in _PLATFORM_ORDER:
                 if not v2.get(key, True):
                     continue
@@ -1974,23 +1992,33 @@ class SponsorMainWindow(QMainWindow):
                         "platform": key,
                         "amount": _DASH_TEST_PLATFORM_AMT,
                         "patron_count": _DASH_TEST_PLATFORM_PATRONS,
-                        "change_amount": _DASH_TEST_TODAY_INCR,
-                        "change_percent": None,
+                        "change_amount": _DASH_TEST_DAILY_INCREASE,
+                        "change_percent": _pct_y,
                         "currency": "JPY",
-                        "last_updated": "2099-12-31 12:00:00",
+                        "last_updated": _DASH_TEST_SCENARIO_LAST_JST,
                     }
                 )
                 ta += _DASH_TEST_PLATFORM_AMT
                 tp += _DASH_TEST_PLATFORM_PATRONS
-                ftoday[key] = _DASH_TEST_TODAY_INCR
+                ftoday[key] = _DASH_TEST_DAILY_INCREASE
             out["by_platform"] = fp
             out["total_amount"] = ta
             out["total_patron_count"] = tp
             out["today_increase_by_platform_jpy"] = ftoday
             out["today_positive_increase_jpy"] = float(sum(ftoday.values()))
-            out["change_vs_yesterday"] = None
-            out["change_pct_vs_yesterday"] = None
-            out["patron_change"] = None
+            n_vis = len(fp)
+            if n_vis > 0:
+                y_total = n_vis * _DASH_TEST_YESTERDAY_PER_PLATFORM
+                ch_y = n_vis * _DASH_TEST_DAILY_INCREASE
+                out["change_vs_yesterday"] = ch_y
+                out["change_pct_vs_yesterday"] = (
+                    (ch_y / y_total * 100) if y_total > 1e-9 else None
+                )
+                out["patron_change"] = n_vis
+            else:
+                out["change_vs_yesterday"] = None
+                out["change_pct_vs_yesterday"] = None
+                out["patron_change"] = None
         return out
 
     def _on_platform_visibility_toggled(self, key: str, on: bool) -> None:
@@ -2346,6 +2374,14 @@ class SponsorMainWindow(QMainWindow):
 
     def _paint_dashboard_view(self, s: dict, period: dict | None):
         s = self._filter_stats_for_dashboard(s)
+        if getattr(self, "_dashboard_test_mode", False):
+            n = len(s.get("by_platform") or [])
+            if n > 0:
+                tot_now = float(s.get("total_amount") or 0)
+                tot_week_ago = n * (_DASH_TEST_PLATFORM_AMT - 7 * _DASH_TEST_DAILY_INCREASE)
+                ch_w = tot_now - tot_week_ago
+                pct_w = (ch_w / tot_week_ago * 100) if tot_week_ago > 1e-9 else None
+                period = {"change_amount": ch_w, "change_percent": pct_w}
         pnames, pcolors = self._plat_meta
         h0 = self._hero_cells[0]
         h1 = self._hero_cells[1]
@@ -3346,7 +3382,7 @@ class SponsorMainWindow(QMainWindow):
         self._refresh_schedule_button_and_status()
         self._refresh_sched_summary_line()
 
-        if not PLAYWRIGHT_AVAILABLE:
+        if import_sync_playwright() is None:
             self._lbl_playwright_miss = QLabel(tr("settings.playwright.missing"))
             self._lbl_playwright_miss.setStyleSheet(f"color: {PALETTE['warning']};")
             left.addWidget(self._lbl_playwright_miss)
@@ -3463,11 +3499,6 @@ class SponsorMainWindow(QMainWindow):
         pr.addWidget(self._purge_btn)
         right.addWidget(purge_card)
         right.addSpacing(_SETTINGS_SECTION_VGAP)
-
-        if not PLAYWRIGHT_AVAILABLE:
-            for key in ("patreon", "fanbox", "fantia"):
-                getattr(self, f"{key}_btn").setEnabled(False)
-                getattr(self, f"{key}_logout_btn").setEnabled(False)
 
         left.addStretch(1)
         right.addStretch(1)
@@ -3703,7 +3734,64 @@ class SponsorMainWindow(QMainWindow):
         elif platform == "fantia":
             self._on_fantia_session(payload)
 
+    def _playwright_install_worker(self, platform: str) -> None:
+        ok, err = ensure_playwright_and_chromium()
+        self._playwright_install_done.emit(platform, ok, err or "")
+
+    def _start_playwright_install_for_login(self, platform: str) -> None:
+        if self._playwright_install_running:
+            return
+        self._playwright_install_running = True
+        st = getattr(self, f"{platform}_status")
+        btn = getattr(self, f"{platform}_btn")
+        done_btn = getattr(self, f"{platform}_done_btn")
+        btn.setEnabled(False)
+        done_btn.setEnabled(False)
+        st.setText(tr("login.playwright.installing"))
+        st.setStyleSheet(f"color: {PALETTE['warning']};")
+        st.setToolTip("")
+        threading.Thread(
+            target=self._playwright_install_worker, args=(platform,), daemon=True
+        ).start()
+
+    def _on_playwright_install_done(self, platform: str, ok: bool, err: str) -> None:
+        self._playwright_install_running = False
+        if ok:
+            if hasattr(self, "_lbl_playwright_miss") and self._lbl_playwright_miss.isVisible():
+                if import_sync_playwright() is not None:
+                    self._lbl_playwright_miss.hide()
+            if platform == "patreon":
+                self._patreon_login_begin()
+            elif platform == "fanbox":
+                self._fanbox_login_begin()
+            else:
+                self._fantia_login_begin()
+            return
+        btn = getattr(self, f"{platform}_btn")
+        done_btn = getattr(self, f"{platform}_done_btn")
+        st = getattr(self, f"{platform}_status")
+        btn.setEnabled(True)
+        done_btn.setEnabled(False)
+        if err == "frozen_no_playwright_module":
+            msg = tr("login.playwright.frozen_bundle")
+        else:
+            detail = (err or "").strip()
+            if len(detail) > 400:
+                detail = detail[:400] + "..."
+            msg = tr("login.playwright.install_failed", detail=detail)
+        st.setText(msg)
+        st.setStyleSheet(f"color: {PALETTE['error']};")
+        st.setToolTip((err or "")[:2000])
+
     def _patreon_login_start(self):
+        if self._playwright_install_running:
+            return
+        if needs_playwright_setup():
+            self._start_playwright_install_for_login("patreon")
+            return
+        self._patreon_login_begin()
+
+    def _patreon_login_begin(self):
         if ce := self.browser_cancel_events.get("patreon"):
             ce.set()
         self.browser_done_events["patreon"] = threading.Event()
@@ -3748,6 +3836,14 @@ class SponsorMainWindow(QMainWindow):
         self._refresh_platform_login_labels()
 
     def _fanbox_login_start(self):
+        if self._playwright_install_running:
+            return
+        if needs_playwright_setup():
+            self._start_playwright_install_for_login("fanbox")
+            return
+        self._fanbox_login_begin()
+
+    def _fanbox_login_begin(self):
         if ce := self.browser_cancel_events.get("fanbox"):
             ce.set()
         self.browser_done_events["fanbox"] = threading.Event()
@@ -3789,6 +3885,14 @@ class SponsorMainWindow(QMainWindow):
         self._refresh_platform_login_labels()
 
     def _fantia_login_start(self):
+        if self._playwright_install_running:
+            return
+        if needs_playwright_setup():
+            self._start_playwright_install_for_login("fantia")
+            return
+        self._fantia_login_begin()
+
+    def _fantia_login_begin(self):
         if ce := self.browser_cancel_events.get("fantia"):
             ce.set()
         self.browser_done_events["fantia"] = threading.Event()

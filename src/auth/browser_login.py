@@ -4,17 +4,15 @@ import time
 from typing import Callable
 
 try:
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-
-try:
     from src.playwright_frozen_env import apply as _apply_playwright_frozen_env
 
     _apply_playwright_frozen_env()
 except Exception:
     pass
+
+from src.playwright_setup import import_sync_playwright
+
+PLAYWRIGHT_AVAILABLE = import_sync_playwright() is not None
 
 
 def _wait_done_or_cancel(
@@ -39,7 +37,8 @@ def _run_fanbox(
     event: threading.Event, cancel: threading.Event, callback: Callable[[str], None]
 ):
     """Fanbox�行��"""
-    if not PLAYWRIGHT_AVAILABLE:
+    sync_playwright = import_sync_playwright()
+    if sync_playwright is None:
         callback("")
         return
     try:
@@ -72,7 +71,8 @@ def _run_fantia(
     event: threading.Event, cancel: threading.Event, callback: Callable[[str], None]
 ):
     """Fantia：登入後按一次「已完成」即抓取 _session_id。未取得則回傳空字串。"""
-    if not PLAYWRIGHT_AVAILABLE:
+    sync_playwright = import_sync_playwright()
+    if sync_playwright is None:
         callback("")
         return
     try:
@@ -143,7 +143,8 @@ def _run_patreon(
 
     先前若 cookie 為空會 clear(event) 並再次等待，但 UI 已停用「已完成」按鈕，導致永遠卡住。
     """
-    if not PLAYWRIGHT_AVAILABLE:
+    sync_playwright = import_sync_playwright()
+    if sync_playwright is None:
         callback("")
         return
     try:
