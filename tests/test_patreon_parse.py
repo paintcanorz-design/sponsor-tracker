@@ -41,6 +41,17 @@ def test_fullwidth_k():
     assert out["amount"] == 1010.0
 
 
+def test_monthly_earnings_mantissa_matches_compact_k():
+    html = '"monthlyEarnings":1.01\n會籍 ＄1.01K /月\n209 收費'
+    out = _parse_patreon_page(html)
+    assert out["amount"] == 1010.0
+
+
+def test_zwsp_between_number_and_k():
+    out = _parse_patreon_page("會籍 $\u200b1.01\u200bK /月")
+    assert out["amount"] == 1010.0
+
+
 def test_plain_dollars_unchanged():
     html = '會籍 $925 ／月'
     out = _parse_patreon_page(html)
@@ -61,6 +72,8 @@ if __name__ == "__main__":
     test_compact_k_two_decimals()
     test_ignores_early_dollar_one_when_k_later()
     test_fullwidth_k()
+    test_monthly_earnings_mantissa_matches_compact_k()
+    test_zwsp_between_number_and_k()
     test_plain_dollars_unchanged()
     test_monthly_earnings_json_no_k()
     print("ok")

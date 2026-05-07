@@ -9,14 +9,55 @@ from typing import Optional
 
 # Patreon 儀表板用 K／全形Ｋ 縮寫；頁面前段常有其他小額 "$1"，不可只用 re.search 取第一筆。
 _PATREON_K_SUFFIX = r"(?:[kK]|\uFF2B)"
+# ASCII $ 或全形 ＄（部分語系／字體）
+_PATREON_DOLLAR = r"(?:\$|\uFF04)"
+
+
+def _patreon_normalize_for_parse(s: str) -> str:
+    """去掉零寬字元，避免 React 把 '1.01' 與 'K' 拆節點時中間帶 ZWSP 導致正則對不到。"""
+    for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\u2060"):
+        s = s.replace(ch, "")
+    return s
+
+
+def _patreon_append_json_earnings(candidates: list[float], content: str, flags: int, key: str) -> None:
+    """
+    部分頁面 API 的 monthlyEarnings 與畫面一致為「尾數」如 1.01，實際為 1010 USD；
+    若同頁可見同一尾數後接 K，則同時納入 v 與 v*1000，再與其它候選取 max。
+    """
+    qk = re.escape(key)
+    for m in re.finditer(rf'"{qk}"\s*:\s*(\d+(?:\.\d+)?)', content, flags):
+        raw = m.group(1)
+        try:
+            v = float(raw.replace(",", ""))
+        except ValueError:
+            continue
+        if not (0 <= v < 1e10):
+            continue
+        candidates.append(v)
+        # 畫面尾數須完整到結尾（避免 JSON 為 1 時誤對到 $1.01K 裡的前綴 1）
+        mant_x = re.escape(raw) + r"(?![\d.])"
+        if re.search(
+            rf"{_PATREON_DOLLAR}\s*{mant_x}\s*{_PATREON_K_SUFFIX}(?=\s*[/／]?\s*月|\s|$|[^\d.,])",
+            content,
+            flags,
+        ):
+            candidates.append(v * 1000.0)
+        elif re.search(
+            rf"(?<![\d.,]){mant_x}\s*{_PATREON_K_SUFFIX}(?=\s*[/／]?\s*月|\s|$|[^\d.,])",
+            content,
+            flags,
+        ):
+            candidates.append(v * 1000.0)
 
 
 def _patreon_best_monthly_usd(content: str, flags: int) -> Optional[float]:
     """從整頁 HTML／可見文字收集候選月費（美金），取最大值以避免誤先匹配到雜訊 $1。"""
+    content = _patreon_normalize_for_parse(content)
     candidates: list[float] = []
 
     for m in re.finditer(
-        rf"\$\s*([\d,]+(?:\.\d+)?)\s*{_PATREON_K_SUFFIX}(?=\s*[/／]?\s*月|\s|$|[^\d.,])",
+        rf"{_PATREON_DOLLAR}\s*([\d,]+(?:\.\d+)?)\s*{_PATREON_K_SUFFIX}(?=\s*[/／]?\s*月|\s|$|[^\d.,])",
         content,
         flags,
     ):
@@ -27,7 +68,7 @@ def _patreon_best_monthly_usd(content: str, flags: int) -> Optional[float]:
         except ValueError:
             pass
 
-    for m in re.finditer(r"\$\s*([\d,]+(?:\.\d+)?)\s*[/／]\s*月", content, flags):
+    for m in re.finditer(rf"{_PATREON_DOLLAR}\s*([\d,]+(?:\.\d+)?)\s*[/／]\s*月", content, flags):
         try:
             v = float(m.group(1).replace(",", ""))
             if 1 <= v < 1e10:
@@ -35,15 +76,10 @@ def _patreon_best_monthly_usd(content: str, flags: int) -> Optional[float]:
         except ValueError:
             pass
 
-    for m in re.finditer(r'"monthlyEarnings"\s*:\s*(\d+(?:\.\d+)?)', content, flags):
-        try:
-            v = float(m.group(1).replace(",", ""))
-            if 1 <= v < 1e10:
-                candidates.append(v)
-        except ValueError:
-            pass
+    for mk in ("monthlyEarnings", "monthly_earnings"):
+        _patreon_append_json_earnings(candidates, content, flags, mk)
 
-    for m in re.finditer(rf"會籍\s*\$\s*([\d,]+(?:\.\d+)?)\s*([kK]|\uFF2B)?", content, flags):
+    for m in re.finditer(rf"會籍\s*{_PATREON_DOLLAR}\s*([\d,]+(?:\.\d+)?)\s*([kK]|\uFF2B)?", content, flags):
         try:
             v = float(m.group(1).replace(",", ""))
             if m.group(2):
@@ -254,7 +290,7 @@ def patreon_fetch_with_playwright(cookies: str, creator_page: str = None) -> Opt
                 page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
                 pass
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2800)
             if "/login" in page.url or "login" in page.url:
                 return None
             content = page.content()
