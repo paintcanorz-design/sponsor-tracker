@@ -4,7 +4,20 @@ Playwright 備援 - 當 requests 無法取得 SPA 頁面時使用
 使用前需執行: playwright install chromium
 """
 import re
-from typing import Optional
+from typing import Match, Optional
+
+
+def _patreon_usd_from_amount_match(m: Match[str]) -> Optional[float]:
+    """解析 $ 金額 capture；第二 capture 為 k/K 時乘以 1000（Patreon 介面常顯示 1.1k）。"""
+    try:
+        v = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    if len(m.groups()) >= 2 and m.group(2):
+        v *= 1000.0
+    if 1 <= v < 1e10:
+        return v
+    return None
 
 try:
     from playwright.sync_api import sync_playwright
@@ -141,23 +154,30 @@ def _parse_patreon_page(content: str) -> Optional[dict]:
     # 允許換行與空白
     flags = re.DOTALL | re.IGNORECASE
 
-    # 金額：會籍 $925 ／月（數字與／月可能分開）
+    # 金額：會籍 $925 ／月；破千可能為 $1k／$1.1k（數字與／月可能分開）
+    _k = r"([kK])"
     for pat in [
-        r'\$\s*([\d,]+(?:\.\d+)?)\s*[/／]\s*月',
-        r'會籍\s*\$\s*([\d,]+(?:\.\d+)?)',
-        r'\$\s*([\d,]+(?:\.\d+)?)\s+／?\s*月',
+        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?\s*[/／]\s*月",
+        rf"會籍\s*\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?",
+        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?\s+／?\s*月",
         r'"monthlyEarnings"\s*:\s*(\d+(?:\.\d+)?)',
-        r'\$\s*([\d,]+(?:\.\d+)?)',
+        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?",
     ]:
         m = re.search(pat, content, flags)
-        if m:
+        if not m:
+            continue
+        if len(m.groups()) >= 2:
+            v = _patreon_usd_from_amount_match(m)
+        else:
             try:
                 v = float(m.group(1).replace(",", ""))
-                if 1 <= v < 1e10:
-                    amount = v
-                    break
+                if not (1 <= v < 1e10):
+                    v = None
             except ValueError:
-                pass
+                v = None
+        if v is not None:
+            amount = v
+            break
 
     # 付費人數：192 收費（數字與收費可能分開）
     for pat in [
