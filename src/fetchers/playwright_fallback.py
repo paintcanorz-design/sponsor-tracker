@@ -4,20 +4,58 @@ Playwright 備援 - 當 requests 無法取得 SPA 頁面時使用
 使用前需執行: playwright install chromium
 """
 import re
-from typing import Match, Optional
+from typing import Optional
 
 
-def _patreon_usd_from_amount_match(m: Match[str]) -> Optional[float]:
-    """解析 $ 金額 capture；第二 capture 為 k/K 時乘以 1000（Patreon 介面常顯示 1.1k）。"""
-    try:
-        v = float(m.group(1).replace(",", ""))
-    except ValueError:
+# Patreon 儀表板用 K／全形Ｋ 縮寫；頁面前段常有其他小額 "$1"，不可只用 re.search 取第一筆。
+_PATREON_K_SUFFIX = r"(?:[kK]|\uFF2B)"
+
+
+def _patreon_best_monthly_usd(content: str, flags: int) -> Optional[float]:
+    """從整頁 HTML／可見文字收集候選月費（美金），取最大值以避免誤先匹配到雜訊 $1。"""
+    candidates: list[float] = []
+
+    for m in re.finditer(
+        rf"\$\s*([\d,]+(?:\.\d+)?)\s*{_PATREON_K_SUFFIX}(?=\s*[/／]?\s*月|\s|$|[^\d.,])",
+        content,
+        flags,
+    ):
+        try:
+            v = float(m.group(1).replace(",", "")) * 1000.0
+            if 1 <= v < 1e10:
+                candidates.append(v)
+        except ValueError:
+            pass
+
+    for m in re.finditer(r"\$\s*([\d,]+(?:\.\d+)?)\s*[/／]\s*月", content, flags):
+        try:
+            v = float(m.group(1).replace(",", ""))
+            if 1 <= v < 1e10:
+                candidates.append(v)
+        except ValueError:
+            pass
+
+    for m in re.finditer(r'"monthlyEarnings"\s*:\s*(\d+(?:\.\d+)?)', content, flags):
+        try:
+            v = float(m.group(1).replace(",", ""))
+            if 1 <= v < 1e10:
+                candidates.append(v)
+        except ValueError:
+            pass
+
+    for m in re.finditer(rf"會籍\s*\$\s*([\d,]+(?:\.\d+)?)\s*([kK]|\uFF2B)?", content, flags):
+        try:
+            v = float(m.group(1).replace(",", ""))
+            if m.group(2):
+                v *= 1000.0
+            if 1 <= v < 1e10:
+                candidates.append(v)
+        except ValueError:
+            pass
+
+    if not candidates:
         return None
-    if len(m.groups()) >= 2 and m.group(2):
-        v *= 1000.0
-    if 1 <= v < 1e10:
-        return v
-    return None
+    return max(candidates)
 
 try:
     from playwright.sync_api import sync_playwright
@@ -154,30 +192,7 @@ def _parse_patreon_page(content: str) -> Optional[dict]:
     # 允許換行與空白
     flags = re.DOTALL | re.IGNORECASE
 
-    # 金額：會籍 $925 ／月；破千可能為 $1k／$1.1k（數字與／月可能分開）
-    _k = r"([kK])"
-    for pat in [
-        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?\s*[/／]\s*月",
-        rf"會籍\s*\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?",
-        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?\s+／?\s*月",
-        r'"monthlyEarnings"\s*:\s*(\d+(?:\.\d+)?)',
-        rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:{_k})?",
-    ]:
-        m = re.search(pat, content, flags)
-        if not m:
-            continue
-        if len(m.groups()) >= 2:
-            v = _patreon_usd_from_amount_match(m)
-        else:
-            try:
-                v = float(m.group(1).replace(",", ""))
-                if not (1 <= v < 1e10):
-                    v = None
-            except ValueError:
-                v = None
-        if v is not None:
-            amount = v
-            break
+    amount = _patreon_best_monthly_usd(content, flags)
 
     # 付費人數：192 收費（數字與收費可能分開）
     for pat in [
