@@ -26,6 +26,17 @@ def test_compact_k_two_decimals():
     assert _parse_patreon_page("會籍 $1.01K /月")["amount"] == 1010.0
 
 
+def test_compact_k_106():
+    assert _parse_patreon_page("會籍 $1.06K / 月\n225 收費")["amount"] == 1060.0
+
+
+def test_monthly_earnings_mantissa_without_k_suffix():
+    html = '"monthlyEarnings":1.06\n225 收費'
+    out = _parse_patreon_page(html)
+    assert out is not None
+    assert out["amount"] == 1060.0
+
+
 def test_ignores_early_dollar_one_when_k_later():
     html = """<meta property="og:price:amount" content="$1"/>
     會籍 $1.01K /月
@@ -70,6 +81,8 @@ if __name__ == "__main__":
     test_compact_k_monthly()
     test_compact_decimal_k_monthly()
     test_compact_k_two_decimals()
+    test_compact_k_106()
+    test_monthly_earnings_mantissa_without_k_suffix()
     test_ignores_early_dollar_one_when_k_later()
     test_fullwidth_k()
     test_monthly_earnings_mantissa_matches_compact_k()

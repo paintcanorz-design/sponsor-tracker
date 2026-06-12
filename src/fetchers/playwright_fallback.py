@@ -20,6 +20,13 @@ def _patreon_normalize_for_parse(s: str) -> str:
     return s
 
 
+def _patreon_apply_k_mantissa_scale(v: float) -> float:
+    """儀表板以 K 顯示時（如 $1.06K），截斷或 JSON 可能只剩尾數 1.06，實際為 1060 USD。"""
+    if 0 < v < 10:
+        return v * 1000.0
+    return v
+
+
 def _patreon_append_json_earnings(candidates: list[float], content: str, flags: int, key: str) -> None:
     """
     部分頁面 API 的 monthlyEarnings 與畫面一致為「尾數」如 1.01，實際為 1010 USD；
@@ -91,7 +98,7 @@ def _patreon_best_monthly_usd(content: str, flags: int) -> Optional[float]:
 
     if not candidates:
         return None
-    return max(candidates)
+    return _patreon_apply_k_mantissa_scale(max(candidates))
 
 try:
     from playwright.sync_api import sync_playwright
