@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16
+
+- **Patreon**: Fix monthly earnings when displayed as compact K (e.g. `$1.06K` → 1060 USD). Values under 10 without a K suffix are scaled ×1000.
+
 ## 1.12
 
 - Mini dashboard UI refresh: right-aligned people count, compact top-right controls (pin + open main), and subtle inset frame style for clearer window separation.
