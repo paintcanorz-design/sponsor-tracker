@@ -52,21 +52,21 @@ def _remove_obsolete_bats(src: Path) -> None:
             continue
         try:
             p.unlink()
-            print(f"[提示] 已移除過時腳本：{name}", file=sys.stderr)
+            print(f"[warn] removed obsolete script: {name}", file=sys.stderr)
         except OSError as e:
-            print(f"[警告] 無法刪除過時「{name}」：{e}", file=sys.stderr)
+            print(f"[warn] could not delete obsolete {name}: {e}", file=sys.stderr)
 
 
 def _copy_release_sidecars_into(src: Path) -> None:
     for name in _RELEASE_SIDECAR:
         root_f = _ROOT / name
         if not root_f.is_file():
-            print(f"[警告] 專案根目錄缺少「{name}」，zip 將不含此檔。", file=sys.stderr)
+            print(f"[warn] missing sidecar in repo, skipped: {name}", file=sys.stderr)
             continue
         try:
             shutil.copy2(root_f, src / name)
         except OSError as e:
-            print(f"[警告] 無法複製「{name}」：{e}", file=sys.stderr)
+            print(f"[warn] could not copy sidecar {name}: {e}", file=sys.stderr)
 
 
 def _pick_source_dir() -> Path | None:
@@ -80,7 +80,7 @@ def _pick_source_dir() -> Path | None:
 def main() -> int:
     src = _pick_source_dir()
     if src is None:
-        print("找不到 dist\\贊助額追蹤 或「【請由此執行】贊助額追蹤」內的 exe，請先執行【一鍵打包】EXE.bat。", file=sys.stderr)
+        print("Missing exe under dist\\贊助額追蹤 or 【請由此執行】贊助額追蹤. Run PyInstaller first.", file=sys.stderr)
         return 1
     _remove_obsolete_bats(src)
     _copy_release_sidecars_into(src)
@@ -99,10 +99,10 @@ def main() -> int:
                         continue
                     zf.write(p, p.relative_to(src))
             except OSError as e:
-                print(f"略過：{p}（{e}）", file=sys.stderr)
+                print(f"[warn] skipped: {p} ({e})", file=sys.stderr)
     if skipped:
-        print(f"[提示] 已排除 {skipped} 個本機／敏感檔，未打入 zip。", file=sys.stderr)
-    print(f"[完成] {zip_path}")
+        print(f"[info] excluded {skipped} local/sensitive file(s) from zip.", file=sys.stderr)
+    print(f"[done] {zip_path}")
     return 0
 
 
