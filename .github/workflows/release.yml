@@ -1,5 +1,5 @@
 # Build Windows portable (onedir) and attach ZIP to the GitHub Release for the pushed tag.
-# Tag format: v1.1.1 (must match or follow APP_VERSION in src/version.py for in-app updates).
+# Tag format: v1.16 (must match APP_VERSION in src/version.py for in-app updates).
 name: Release Windows build
 
 on:
@@ -31,24 +31,38 @@ jobs:
         run: pyinstaller sponsor_tracker.spec
 
       - name: Create portable ZIP
+        run: python pack_release_zip.py
+
+      - name: Verify release ZIP
         shell: pwsh
         run: |
           $ref = "${{ github.ref_name }}"
           $ver = $ref.TrimStart('v')
-          $dist = Join-Path "dist" "贊助額追蹤"
-          $exe = Join-Path $dist "贊助額追蹤.exe"
-          if (-not (Test-Path -LiteralPath $exe)) {
-            throw "Build output missing: $exe"
+          $zip = Join-Path "release" "SponsorTracker-Windows-v$ver.zip"
+          if (-not (Test-Path -LiteralPath $zip)) {
+            throw "Missing release zip: $zip"
           }
-          $zip = "SponsorTracker-Windows-v$ver.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -LiteralPath $dist -DestinationPath $zip
-          Get-Item $zip | Format-List Name, Length
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $zip))
+          try {
+            $names = @($z.Entries | ForEach-Object { $_.FullName })
+            $need = @("贊助額追蹤.exe", "開啟exe前請開啟此檔案安裝所需環境.bat", "使用說明.txt", "_internal/")
+            foreach ($item in $need) {
+              $hit = $false
+              foreach ($n in $names) {
+                if ($n -like "*$item*") { $hit = $true; break }
+              }
+              if (-not $hit) { throw "Release zip missing required entry: $item" }
+            }
+          } finally {
+            $z.Dispose()
+          }
+          Get-Item -LiteralPath $zip | Format-List Name, Length
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
-          files: SponsorTracker-Windows-v*.zip
+          files: release/SponsorTracker-Windows-v*.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

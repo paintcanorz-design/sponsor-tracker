@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.16.1
+
+- **Release zip**: GitHub Actions now uses `pack_release_zip.py` (same as local build). Includes `開啟exe前請開啟此檔案安裝所需環境.bat` and `使用說明.txt` beside the exe.
+
 ## 1.16
 
 - **Patreon**: Fix monthly earnings when displayed as compact K (e.g. `$1.06K` → 1060 USD). Values under 10 without a K suffix are scaled ×1000.

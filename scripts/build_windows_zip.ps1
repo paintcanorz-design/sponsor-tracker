@@ -9,15 +9,15 @@ $verLine = Select-String -Path (Join-Path $root "src\version.py") -Pattern 'APP_
 $ver = if ($verLine) { $verLine.Matches.Groups[1].Value } else { "0.0.0" }
 Write-Host "APP_VERSION from src/version.py: $ver"
 
-python -m PyInstaller sponsor_tracker.spec
 $distDir = Join-Path $root "dist\贊助額追蹤"
-$exe = Join-Path $distDir "贊助額追蹤.exe"
-if (-not (Test-Path -LiteralPath $exe)) {
-    throw "Missing $exe"
+python -m PyInstaller sponsor_tracker.spec
+if (-not (Test-Path -LiteralPath (Join-Path $distDir "贊助額追蹤.exe"))) {
+    throw "Missing $distDir\贊助額追蹤.exe"
 }
-$zipName = "SponsorTracker-Windows-v$ver.zip"
-$zipPath = Join-Path $root "dist\$zipName"
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-Compress-Archive -LiteralPath $distDir -DestinationPath $zipPath
+python pack_release_zip.py
+$zipPath = Join-Path $root "release\SponsorTracker-Windows-v$ver.zip"
+if (-not (Test-Path -LiteralPath $zipPath)) {
+    throw "Missing $zipPath"
+}
 Write-Host "Created: $zipPath"
-Get-Item $zipPath | Format-List FullName, Length
+Get-Item -LiteralPath $zipPath | Format-List FullName, Length
